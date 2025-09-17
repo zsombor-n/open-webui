@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run:*)",
+      "Bash(python:*)",
+      "Bash(uv sync:*)",
+      "Bash(dir:*)",
+      "Bash(.venv/Scripts/python.exe -m uvicorn open_webui.main:app --host 0.0.0.0 --port 8080)",
+      "Bash(set PYTHONIOENCODING=utf-8)",
+      "Bash(curl:*)",
+      "Bash(timeout 10 curl -I http://localhost:8080/)",
+      "Bash(findstr:*)",
+      "Bash(../.venv/Scripts/python.exe -c \"from open_webui.main import app; print(''Import successful'')\")",
+      "Bash(npm run dev:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
