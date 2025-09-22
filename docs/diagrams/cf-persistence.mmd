@@ -1,0 +1,36 @@
+---
+config:
+  layout: elk
+  theme: dark
+---
+flowchart LR
+    pgServer("PostgreSQL Server
+<pre>
+╔═══════════════════════════╗
+║       On client VPS       ║
+║  Dedicated DB Instance    ║
+║  Single Tenant Solution   ║
+║  Seperately scoped DBS    ║
+╚═══════════════════════════╝
+</pre>") --> dbOpenWebUI[("Database: openwebui")] & dbCogniforce[("Database: cogniforce")]
+dbOpenWebUI --> schemaOpenWebUIPublic("Schema: public")
+schemaOpenWebUIPublic --> tablesOpenWebUI["Tables (25+)"]
+dbCogniforce -->  schemaCogniforcePublic("Schema: public")
+schemaCogniforcePublic --> tblConversationInsights["conversation_insights"] & tblUserEngagement["user_engagement"] & tblConversationAnalysis["conversation_analysis"] & tblDailyAggregates["daily_aggregates"] & tblProcessingLog["processing_log"] & tblAlembicVersion["alembic_version"]
+pgServer:::Class_01
+dbOpenWebUI:::Aqua
+dbCogniforce:::Aqua
+schemaOpenWebUIPublic:::Rose
+tablesOpenWebUI:::Pine
+
+schemaCogniforcePublic:::Rose
+tblConversationInsights:::Pine
+tblUserEngagement:::Pine
+tblConversationAnalysis:::Pine
+tblDailyAggregates:::Pine
+tblProcessingLog:::Pine
+tblAlembicVersion:::Pine
+classDef Class_01 stroke-width:4px, stroke-dasharray: 0, stroke:#0044FF, fill:#2962FF, color:#FFFFFF
+classDef Aqua stroke-width:1px, stroke-dasharray:none, stroke:#46EDC8, fill:#DEFFF8, color:#378E7A
+classDef Rose stroke-width:1px, stroke-dasharray:none, stroke:#FF5978, fill:#FFDFE5, color:#8E2236
+classDef Pine stroke-width:1px, stroke-dasharray:none, stroke:#254336, fill:#27654A, color:#FFFFFF

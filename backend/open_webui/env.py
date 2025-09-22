@@ -301,6 +301,32 @@ if "postgres://" in DATABASE_URL:
 
 DATABASE_SCHEMA = os.environ.get("DATABASE_SCHEMA", None)
 
+####################################
+# COGNIFORCE DATABASE CONFIGURATION
+####################################
+
+# Cogniforce Database URL - separate database for analytics and new features
+COGNIFORCE_DATABASE_URL = os.environ.get("COGNIFORCE_DATABASE_URL")
+
+# If no separate Cogniforce URL is provided, default to a separate database on same server
+if not COGNIFORCE_DATABASE_URL:
+    if "postgresql://" in DATABASE_URL:
+        # Extract base URL and change database name to 'cogniforce'
+        base_url = DATABASE_URL.rsplit('/', 1)[0]
+        COGNIFORCE_DATABASE_URL = f"{base_url}/cogniforce"
+    else:
+        # For SQLite, create separate file
+        COGNIFORCE_DATABASE_URL = f"sqlite:///{DATA_DIR}/cogniforce.db"
+
+# Replace postgres:// with postgresql:// for consistency
+if COGNIFORCE_DATABASE_URL and "postgres://" in COGNIFORCE_DATABASE_URL:
+    COGNIFORCE_DATABASE_URL = COGNIFORCE_DATABASE_URL.replace("postgres://", "postgresql://")
+
+log.info(f"OpenWebUI Database: {DATABASE_URL[:50]}...")
+log.info(f"Cogniforce Database: {COGNIFORCE_DATABASE_URL[:50]}...")
+
+####################################
+
 DATABASE_POOL_SIZE = os.environ.get("DATABASE_POOL_SIZE", None)
 
 if DATABASE_POOL_SIZE != None:

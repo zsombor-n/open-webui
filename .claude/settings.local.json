@@ -15,5 +15,6 @@
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "outputStyle": "code-quality-focus"
 }
