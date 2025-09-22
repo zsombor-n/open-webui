@@ -97,6 +97,7 @@ from open_webui.routers.retrieval import (
 )
 
 from open_webui.internal.db import Session, engine
+from open_webui.internal.cogniforce_db import initialize_cogniforce_database
 
 from open_webui.models.functions import Functions
 from open_webui.models.models import Models
@@ -540,6 +541,15 @@ async def lifespan(app: FastAPI):
 
     if LICENSE_KEY:
         get_license_data(app, LICENSE_KEY)
+
+    # Initialize Cogniforce database (dual-database setup)
+    log.info("Initializing Cogniforce database...")
+    try:
+        initialize_cogniforce_database()
+        log.info("Cogniforce database initialization completed successfully")
+    except Exception as e:
+        log.error(f"Failed to initialize Cogniforce database: {e}")
+        log.warning("Continuing without Cogniforce database features")
 
     # This should be blocking (sync) so functions are not deactivated on first /get_models calls
     # when the first user lands on the / route.

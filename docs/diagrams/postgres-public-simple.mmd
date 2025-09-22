@@ -1,0 +1,60 @@
+---
+config:
+  layout: fixed
+  look: neo
+  theme: neo-dark
+---
+flowchart TB
+    user("USER") -- "owns 1-n" --> channel("CHANNEL")
+    user -- "member_of n-m" --> channel_member("CHANNEL_MEMBER")
+    user -- "creates 1-n" --> chat("CHAT") & prompt("PROMPT")
+    user -- "tags 1-n" --> chatidtag("CHATIDTAG")
+    user -- "uploads 1-n" --> document("DOCUMENT")
+    user -- "submits 1-n" --> feedback("FEEDBACK")
+    user -- "stores 1-n" --> file("FILE")
+    user -- "organizes 1-n" --> folder("FOLDER")
+    user -- "defines 1-n" --> function("FUNCTION") & tag("TAG")
+    user -- "manages 1-n" --> group("GROUP")
+    user -- "maintains 1-n" --> knowledge("KNOWLEDGE")
+    user -- "has 1-n" --> memory("MEMORY")
+    user -- "sends 1-n" --> message("MESSAGE")
+    user -- "reacts 1-n" --> message_reaction("MESSAGE_REACTION")
+    user -- "configures 1-n" --> model("MODEL")
+    user -- "writes 1-n" --> note_table("NOTE")
+    user -- "develops 1-n" --> tool("TOOL")
+    channel -- "contains 1-n" --> channel_member
+    channel -- "hosts 1-n" --> message
+    chat -- "tagged_with 1-n" --> chatidtag
+    chat -- "organized_in n-1" --> folder
+    message -- "has 1-n" --> message_reaction
+    message -- "belongs_to n-1" --> channel
+    channel_member -- "refers_to n-1" --> channel
+    chatidtag -- "references n-1" --> chat
+    message_reaction -- "on n-1" --> message
+    group -. "includes n-m" .-> user
+    model -- "based_on n-1" --> model
+    folder -- "child_of n-1" --> folder
+    message -- "replies_to n-1" --> message
+    auth("AUTH")
+    user:::entity
+    channel:::entity
+    channel_member:::entity
+    chat:::entity
+    prompt:::entity
+    chatidtag:::entity
+    document:::entity
+    feedback:::entity
+    file:::entity
+    folder:::entity
+    function:::entity
+    tag:::entity
+    group:::entity
+    knowledge:::entity
+    memory:::entity
+    message:::entity
+    message_reaction:::entity
+    model:::entity
+    note_table:::entity
+    tool:::entity
+    auth:::entity
+    classDef entity fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#000,font-weight:bold
