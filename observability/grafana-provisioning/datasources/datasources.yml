@@ -1,0 +1,26 @@
+# Grafana Data Sources Configuration
+
+apiVersion: 1
+
+datasources:
+  # Prometheus - for metrics
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://cf-prometheus:9090
+    isDefault: true
+    editable: true
+
+  # Loki - for logs
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://cf-loki:3100
+    editable: true
+
+  # Jaeger - for traces
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://cf-jaeger:16686
+    editable: true

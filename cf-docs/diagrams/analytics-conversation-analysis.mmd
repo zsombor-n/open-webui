@@ -1,0 +1,88 @@
+sequenceDiagram
+    participant P as Analytics Processor
+    participant ODB as OpenWebUI Database
+    participant HASH as Privacy Hasher
+    participant TIMER as Timing Analyzer
+    participant REDACT as Content Redactor
+    participant OAI as OpenAI API
+    participant CF as Cogniforce Database
+
+    Note over P: Processing single conversation
+
+    P->>+ODB: get_chat_by_id(conversation_id)
+    ODB-->>-P: ChatModel with id, user_id, chat messages, timestamps
+
+    Note over P: Privacy Protection
+    P->>+HASH: hash_user_id(user_id, ANALYTICS_SALT)
+    HASH-->>-P: user_id_hash (SHA-256)
+
+    Note over P: Extract and validate messages
+    P->>P: extract_messages_from_chat()
+    P->>P: validate_message_structure()
+
+    Note over P: Timing Analysis
+    P->>+TIMER: calculate_timing_metrics(messages)
+
+    rect rgb(240, 248, 255)
+        Note over TIMER: Message Timing Calculations
+        TIMER->>TIMER: extract_timestamps()
+        TIMER->>TIMER: calculate_total_duration()
+        TIMER->>TIMER: identify_idle_periods(threshold=10min)
+        TIMER->>TIMER: calculate_active_duration()
+    end
+
+    TIMER-->>-P: TimingMetrics with first_msg, last_msg, total_min, active_min, idle_min, msg_count
+
+    Note over P: Content Preparation for LLM
+    P->>+REDACT: create_conversation_summary(messages)
+
+    rect rgb(255, 248, 240)
+        Note over REDACT: Privacy-Safe Summary Creation
+        REDACT->>REDACT: extract_key_topics()
+        REDACT->>REDACT: remove_pii_data()
+        REDACT->>REDACT: remove_sensitive_info()
+        REDACT->>REDACT: limit_to_500_words()
+    end
+
+    REDACT-->>-P: sanitized_summary (privacy-safe)
+
+    Note over P: LLM Time Estimation
+    P->>+OAI: estimate_manual_completion_time(summary)
+
+    rect rgb(248, 255, 248)
+        Note over OAI: OpenAI Processing
+        OAI->>OAI: analyze_task_complexity()
+        OAI->>OAI: estimate_time_ranges()
+        OAI->>OAI: calculate_confidence_level()
+    end
+
+    OAI-->>-P: TimeEstimate with low=15, likely=25, high=40, confidence=82
+
+    Note over P: Calculate Time Savings
+    P->>P: calculate_time_savings(active_min, likely_estimate)
+    P->>P: time_saved equals max(0, likely_estimate minus active_min)
+
+    Note over P: Prepare analysis record
+    P->>P: create_conversation_analysis_record()
+
+    P->>+CF: save_conversation_analysis(conversation_analysis_data)
+
+    CF-->>-P: ConversationAnalysis with id, processed_at
+
+    Note over P: Update processing metrics
+    P->>P: increment_processed_count()
+    P->>P: track_processing_duration()
+
+    rect rgb(255, 240, 240)
+        Note over P,CF: Error Scenarios
+        alt Invalid conversation data
+            P->>P: log_validation_error()
+            P->>P: skip_conversation()
+        else OpenAI API failure
+            P->>P: use_fallback_estimate()
+            P->>P: log_llm_failure()
+        else Database save failure
+            P->>P: retry_with_backoff()
+            P->>P: log_database_error()
+        end
+    end

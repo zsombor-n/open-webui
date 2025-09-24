@@ -1,0 +1,74 @@
+# Alertmanager Configuration for OpenWebUI Analytics
+# This handles alert routing and notification for the observability stack
+
+global:
+  # The smarthost and SMTP sender used for mail notifications.
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alertmanager@openwebui.local'
+
+# The directory from which notification templates are read.
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# The root route on which each incoming alert enters.
+route:
+  # The labels by which incoming alerts are grouped together. For example,
+  # multiple alerts coming in for cluster=A and alertname=LatencyHigh would
+  # be batched into a single group.
+  group_by: ['alertname', 'cluster', 'service']
+
+  # When a new group of alerts is created by an incoming alert, wait at
+  # least 'group_wait' to send the initial notification.
+  group_wait: 10s
+
+  # When the first notification was sent, wait 'group_interval' before
+  # sending a notification about new alerts that are added to a group
+  # of alerts for which an initial notification has already been sent.
+  group_interval: 10s
+
+  # If an alert has successfully been sent, wait 'repeat_interval' before
+  # resending them.
+  repeat_interval: 12h
+
+  # Default receiver
+  receiver: web.hook
+
+  # All the above attributes are inherited by all child routes and can be
+  # overwritten on each.
+  routes:
+  # High priority alerts
+  - match:
+      severity: critical
+    receiver: critical-alerts
+    group_wait: 5s
+    repeat_interval: 1h
+
+  # Analytics specific alerts
+  - match_re:
+      alertname: Analytics.*
+    receiver: analytics-team
+    group_interval: 5m
+
+receivers:
+- name: 'web.hook'
+  webhook_configs:
+  - url: 'http://localhost:5001/'
+    send_resolved: true
+
+- name: 'critical-alerts'
+  webhook_configs:
+  - url: 'http://localhost:5001/critical'
+    send_resolved: true
+
+- name: 'analytics-team'
+  webhook_configs:
+  - url: 'http://localhost:5001/analytics'
+    send_resolved: true
+
+# Inhibit rules allow to mute a set of alerts given that another alert is firing.
+inhibit_rules:
+- source_match:
+    severity: 'critical'
+  target_match:
+    severity: 'warning'
+  equal: ['alertname', 'cluster', 'service']

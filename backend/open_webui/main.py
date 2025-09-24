@@ -62,6 +62,7 @@ from open_webui.socket.main import (
     get_active_user_ids,
 )
 from open_webui.routers import (
+    analytics,
     audio,
     images,
     ollama,
@@ -597,7 +598,37 @@ async def lifespan(app: FastAPI):
             None,
         )
 
+    # Initialize Analytics Scheduler
+    log.info("Initializing Analytics Scheduler...")
+    try:
+        from open_webui.services.analytics_scheduler import AnalyticsScheduler
+        from open_webui.config import (
+            ANALYTICS_OPENAI_API_KEY,
+            ANALYTICS_DAILY_PROCESSING_ENABLED
+        )
+
+        analytics_scheduler = AnalyticsScheduler(
+            openai_api_key=ANALYTICS_OPENAI_API_KEY.value,
+            enabled=ANALYTICS_DAILY_PROCESSING_ENABLED.value
+        )
+
+        await analytics_scheduler.start()
+        app.state.analytics_scheduler = analytics_scheduler
+        log.info("Analytics Scheduler initialized successfully")
+    except Exception as e:
+        log.error(f"Failed to initialize Analytics Scheduler: {e}")
+        log.warning("Continuing without scheduled analytics processing")
+
     yield
+
+    # Shutdown Analytics Scheduler
+    if hasattr(app.state, "analytics_scheduler"):
+        log.info("Shutting down Analytics Scheduler...")
+        try:
+            await app.state.analytics_scheduler.stop()
+            log.info("Analytics Scheduler stopped successfully")
+        except Exception as e:
+            log.error(f"Error shutting down Analytics Scheduler: {e}")
 
     if hasattr(app.state, "redis_task_command_listener"):
         app.state.redis_task_command_listener.cancel()
@@ -1254,6 +1285,7 @@ app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
 
 app.include_router(auths.router, prefix="/api/v1/auths", tags=["auths"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
+app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 
 
 app.include_router(channels.router, prefix="/api/v1/channels", tags=["channels"])

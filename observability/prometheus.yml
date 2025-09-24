@@ -1,0 +1,46 @@
+# Prometheus Configuration for OpenWebUI Analytics
+# Scrapes metrics from OpenTelemetry Collector
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert-rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # OpenTelemetry Collector metrics
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8889']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # OpenWebUI Analytics metrics (via OTEL Collector)
+  - job_name: 'openwebui-analytics'
+    static_configs:
+      - targets: ['otel-collector:8889']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    metric_relabel_configs:
+      # Keep only analytics-related metrics
+      - source_labels: [__name__]
+        regex: 'openwebui_(analytics_.*|http_server_.*|webui_users_.*)'
+        action: keep
+
+  # System metrics (if node_exporter is available)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
