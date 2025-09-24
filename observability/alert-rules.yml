@@ -1,0 +1,73 @@
+# Prometheus Alert Rules for Analytics
+# Define alerts for key analytics metrics
+
+groups:
+  - name: analytics-alerts
+    rules:
+      # High error rate alert
+      - alert: AnalyticsHighErrorRate
+        expr: rate(openwebui_analytics_errors_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: analytics
+        annotations:
+          summary: "High error rate in analytics operations"
+          description: "Analytics error rate is {{ $value }} errors per second"
+
+      # Slow response time alert
+      - alert: AnalyticsSlowResponseTime
+        expr: rate(openwebui_http_server_duration_seconds_sum{route=~".*analytics.*"}[5m]) / rate(openwebui_http_server_duration_seconds_count{route=~".*analytics.*"}[5m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: analytics
+        annotations:
+          summary: "Analytics API response time is slow"
+          description: "Average response time is {{ $value }} seconds"
+
+      # Low cache hit rate alert
+      - alert: AnalyticsLowCacheHitRate
+        expr: rate(openwebui_analytics_cache_operations_total{result="hit"}[10m]) / rate(openwebui_analytics_cache_operations_total[10m]) < 0.7
+        for: 10m
+        labels:
+          severity: warning
+          service: analytics
+        annotations:
+          summary: "Analytics cache hit rate is low"
+          description: "Cache hit rate is {{ $value | humanizePercentage }}"
+
+      # Database query duration alert
+      - alert: AnalyticsSlowDatabaseQueries
+        expr: rate(openwebui_analytics_database_query_duration_seconds_sum[5m]) / rate(openwebui_analytics_database_query_duration_seconds_count[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: analytics
+        annotations:
+          summary: "Analytics database queries are slow"
+          description: "Average query duration is {{ $value }} seconds"
+
+  - name: system-alerts
+    rules:
+      # OpenWebUI service down
+      - alert: OpenWebUIDown
+        expr: up{job="openwebui-analytics"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: openwebui
+        annotations:
+          summary: "OpenWebUI service is down"
+          description: "OpenWebUI has been down for more than 1 minute"
+
+      # High request volume
+      - alert: HighRequestVolume
+        expr: rate(openwebui_http_server_requests_total[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: openwebui
+        annotations:
+          summary: "High request volume detected"
+          description: "Request rate is {{ $value }} requests per second"

@@ -1,0 +1,64 @@
+---
+config:
+  layout: elk
+  theme: default
+---
+flowchart LR
+    subgraph API["Analytics API Endpoints"]
+        direction LR
+        summary["/api/v1/analytics/summary<br>GET - Dashboard overview"]
+        dailyTrend["/api/v1/analytics/daily-trend<br>GET - Time series data"]
+        userBreakdown["/api/v1/analytics/user-breakdown<br>GET - Top users analysis"]
+        conversations["/api/v1/analytics/conversations<br>GET - Recent conversations"]
+        export["/api/v1/analytics/export/{format}<br>GET - Data export"]
+        health["/api/v1/analytics/health<br>GET - System status"]
+    end
+    subgraph OpenWebUIDB["OpenWebUI Database"]
+        direction TB
+        chatTable[("chat<br>Source conversations")]
+        userTable[("user<br>User information")]
+    end
+    subgraph CogniforceDB["Cogniforce Database"]
+        direction TB
+        userEng[("user_engagement<br>User activity metrics")]
+        convAnalysis[("conversation_analysis<br>Per-conversation metrics")]
+        dailyAgg[("daily_aggregates<br>Pre-computed statistics")]
+        procLog[("processing_log<br>System health tracking")]
+        convInsights[("conversation_insights<br>Basic analytics")]
+    end
+    summary -- aggregate queries --> dailyAgg
+    summary -- summary stats --> convAnalysis
+    dailyTrend -- time series --> dailyAgg
+    dailyTrend -- trend calculations --> convAnalysis
+    userBreakdown -- user aggregates --> dailyAgg
+    userBreakdown -- user statistics --> convAnalysis
+    userBreakdown -- user details --> userEng
+    health -- processing stats --> convAnalysis
+    health -- system status --> procLog
+    conversations -- recent analysis --> convAnalysis
+    conversations -- conversation data --> chatTable
+    export -- filtered data --> convAnalysis
+    export -- aggregated data --> dailyAgg
+    export -- user data --> userEng
+    chatTable -. process conversations .-> convAnalysis
+    userTable -. hash user IDs .-> convAnalysis
+    convAnalysis -. aggregate daily .-> dailyAgg
+    convAnalysis -. update engagement .-> userEng
+    summary:::apiEndpoint
+    dailyTrend:::apiEndpoint
+    userBreakdown:::apiEndpoint
+    health:::apiEndpoint
+    conversations:::apiEndpoint
+    export:::apiEndpoint
+    chatTable:::openwebuiTable
+    userTable:::openwebuiTable
+    convAnalysis:::cogniforceTable
+    dailyAgg:::cogniforceTable
+    procLog:::cogniforceTable
+    convInsights:::cogniforceTable
+    userEng:::cogniforceTable
+    classDef apiEndpoint fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+    classDef openwebuiTable fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef cogniforceTable fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef dataFlow stroke:#4caf50,stroke-width:2px
+    classDef processFlow stroke-dasharray: 3 3,stroke:#9c27b0

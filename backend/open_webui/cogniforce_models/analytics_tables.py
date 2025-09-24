@@ -12,15 +12,82 @@ conversation_insights and user_engagement tables.
 
 import time
 import uuid
-from typing import Optional
-from pydantic import BaseModel, ConfigDict
+import hashlib
+import logging
+from typing import Optional, List, Dict, Any
+from datetime import datetime, date, timedelta
+from functools import wraps
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     Column, String, Integer, Float, Text, Date, DateTime,
-    CheckConstraint, UniqueConstraint, Index
+    CheckConstraint, UniqueConstraint, Index, text
 )
 from sqlalchemy.dialects.postgresql import UUID
-from open_webui.internal.cogniforce_db import CogniforceBase
-from open_webui.internal.db import JSONField
+from open_webui.internal.cogniforce_db import CogniforceBase, get_cogniforce_db
+from open_webui.internal.db import JSONField, get_db
+
+# Import simplified OpenTelemetry integration
+from .analytics_otel import track_analytics_operation, track_cache_operation, DatabaseOperationTracker, log_analytics_event
+from .analytics_cache import cached, get_analytics_cache
+
+# Configure structured logger for analytics
+log = logging.getLogger(__name__)
+
+
+def log_performance(operation_name: str):
+    """Decorator to log performance metrics for analytics operations."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            operation_id = str(uuid.uuid4())[:8]
+
+            log.info(
+                "Starting analytics operation",
+                extra={
+                    "operation_name": operation_name,
+                    "operation_id": operation_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+
+            try:
+                result = func(*args, **kwargs)
+                duration = time.time() - start_time
+
+                log.info(
+                    "Analytics operation completed successfully",
+                    extra={
+                        "operation_name": operation_name,
+                        "operation_id": operation_id,
+                        "duration_seconds": round(duration, 3),
+                        "result_count": len(result) if isinstance(result, list) else 1,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+
+                return result
+
+            except Exception as e:
+                duration = time.time() - start_time
+
+                log.error(
+                    "Analytics operation failed",
+                    extra={
+                        "operation_name": operation_name,
+                        "operation_id": operation_id,
+                        "duration_seconds": round(duration, 3),
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "timestamp": datetime.now().isoformat()
+                    },
+                    exc_info=True
+                )
+
+                raise
+
+        return wrapper
+    return decorator
 
 
 ####################
@@ -55,7 +122,7 @@ class ConversationAnalysis(CogniforceBase):
 
     # Metadata
     message_count = Column(Integer, nullable=False)
-    processed_at = Column(DateTime(timezone=True), default=lambda: time.time())
+    processed_at = Column(DateTime(timezone=True), default=lambda: datetime.now())
     processing_version = Column(String(20), default="1.0")
 
     # Analysis data
@@ -108,8 +175,8 @@ class DailyAggregate(CogniforceBase):
     avg_confidence_level = Column(Float, nullable=True)
 
     # Processing metadata
-    created_at = Column(DateTime(timezone=True), default=lambda: time.time())
-    updated_at = Column(DateTime(timezone=True), default=lambda: time.time())
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now())
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now())
 
     __table_args__ = (
         UniqueConstraint('analysis_date', 'user_id_hash', name='unique_daily_aggregate'),
@@ -150,7 +217,7 @@ class ProcessingLog(CogniforceBase):
     error_message = Column(Text, nullable=True)
     error_details = Column(JSONField, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: time.time())
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now())
 
     __table_args__ = (
         Index('idx_processing_log_run_date', 'run_date'),
@@ -249,3 +316,300 @@ class UserBreakdownModel(BaseModel):
     total_time_saved: int
     avg_time_saved_per_conversation: float
     avg_confidence_level: float
+
+
+####################
+# Response Models (from router)
+####################
+
+class AnalyticsSummary(BaseModel):
+    total_conversations: int = Field(alias="totalConversations")
+    total_time_saved: int = Field(alias="totalTimeSaved")  # minutes
+    avg_time_saved_per_conversation: float = Field(alias="avgTimeSavedPerConversation")
+    confidence_level: float = Field(alias="confidenceLevel")
+
+    class Config:
+        populate_by_name = True
+
+
+class DailyTrendItem(BaseModel):
+    date: str
+    conversations: int
+    time_saved: int = Field(alias="timeSaved")  # minutes
+    avg_confidence: float = Field(alias="avgConfidence")
+
+    class Config:
+        populate_by_name = True
+
+
+class UserBreakdownItem(BaseModel):
+    user_id_hash: str = Field(alias="userIdHash")
+    user_name: str = Field(alias="userName")
+    conversations: int
+    time_saved: int = Field(alias="timeSaved")  # minutes
+    avg_confidence: float = Field(alias="avgConfidence")
+
+    class Config:
+        populate_by_name = True
+
+
+class ConversationItem(BaseModel):
+    id: str
+    user_name: str = Field(alias="userName")
+    created_at: str = Field(alias="createdAt")
+    time_saved: int = Field(alias="timeSaved")  # minutes
+    confidence: int
+    summary: str
+
+    class Config:
+        populate_by_name = True
+
+
+class HealthStatus(BaseModel):
+    status: str
+    last_processing_run: Optional[str] = Field(alias="lastProcessingRun")
+    next_scheduled_run: str = Field(alias="nextScheduledRun")
+    system_info: Dict[str, Any] = Field(alias="systemInfo")
+
+    class Config:
+        populate_by_name = True
+
+
+####################
+# Analytics Table Class
+####################
+
+class AnalyticsTable:
+    """Analytics data access layer following OpenWebUI Table class pattern."""
+
+    def _get_user_name_from_hash(self, user_hash: str) -> str:
+        """Map user hash back to real name and email for display."""
+        try:
+            log.debug(
+                "Looking up user name from hash",
+                extra={
+                    "user_hash_prefix": user_hash[:8],
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+
+            # Get all users from OpenWebUI database and find matching hash
+            with get_db() as db:
+                result = db.execute(text('SELECT id, email, name FROM "user"'))
+                users = result.fetchall()
+
+                for user in users:
+                    user_email = user[1]  # email column
+                    user_name = user[2]   # name column
+
+                    # Generate hash for this user's email
+                    email_hash = hashlib.sha256(user_email.encode()).hexdigest()
+
+                    if email_hash == user_hash:
+                        # Return format: "Name (email)"
+                        log.debug(
+                            "User name resolved successfully",
+                            extra={
+                                "user_hash_prefix": user_hash[:8],
+                                "user_name": user_name,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        )
+                        return f"{user_name} ({user_email})"
+
+                # Fallback for unknown hashes
+                log.warning(
+                    "User hash not found in database",
+                    extra={
+                        "user_hash_prefix": user_hash[:8],
+                        "total_users_checked": len(users),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+                return f"User {user_hash[:8]}"
+
+        except Exception as e:
+            # Fallback in case of database error
+            log.error(
+                "Database error during user lookup",
+                extra={
+                    "user_hash_prefix": user_hash[:8],
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "timestamp": datetime.now().isoformat()
+                },
+                exc_info=True
+            )
+            return f"User {user_hash[:8]}"
+
+    @track_analytics_operation("get_summary_data")
+    @cached(ttl=300, key_prefix="analytics")  # Cache for 5 minutes
+    def get_summary_data(self) -> AnalyticsSummary:
+        """Get analytics summary from database."""
+        with get_cogniforce_db() as db:
+            # Query conversation analysis table for aggregated metrics
+            result = db.execute(text("""
+                SELECT
+                    COUNT(*) as total_conversations,
+                    COALESCE(SUM(time_saved_minutes), 0) as total_time_saved,
+                    COALESCE(AVG(time_saved_minutes), 0) as avg_time_saved,
+                    COALESCE(AVG(confidence_level), 0) as avg_confidence
+                FROM conversation_analysis
+            """))
+
+            row = result.fetchone()
+            if row:
+                return AnalyticsSummary(
+                    total_conversations=row[0] or 0,
+                    total_time_saved=row[1] or 0,
+                    avg_time_saved_per_conversation=float(row[2] or 0),
+                    confidence_level=float(row[3] or 0)
+                )
+
+            # Return empty data if no analysis exists
+            return AnalyticsSummary(
+                total_conversations=0,
+                total_time_saved=0,
+                avg_time_saved_per_conversation=0.0,
+                confidence_level=0.0
+            )
+
+    @track_analytics_operation("get_daily_trend_data")
+    @cached(ttl=180, key_prefix="analytics")  # Cache for 3 minutes
+    def get_daily_trend_data(self, days: int) -> List[DailyTrendItem]:
+        """Get daily trend data from database."""
+        with get_cogniforce_db() as db:
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=days-1)
+
+            result = db.execute(text("""
+                SELECT
+                    analysis_date,
+                    COALESCE(SUM(conversation_count), 0) as conversations,
+                    COALESCE(SUM(total_time_saved), 0) as time_saved,
+                    COALESCE(AVG(avg_confidence_level), 0) as avg_confidence
+                FROM daily_aggregates
+                WHERE analysis_date >= :start_date AND analysis_date <= :end_date
+                AND user_id_hash IS NULL  -- Global aggregates only
+                GROUP BY analysis_date
+                ORDER BY analysis_date DESC
+            """), {"start_date": start_date, "end_date": end_date})
+
+            trend_data = []
+            for row in result.fetchall():
+                trend_data.append(DailyTrendItem(
+                    date=row[0].isoformat(),
+                    conversations=row[1] or 0,
+                    time_saved=row[2] or 0,
+                    avg_confidence=float(row[3] or 0)
+                ))
+
+            return trend_data
+
+    @track_analytics_operation("get_user_breakdown_data")
+    @cached(ttl=240, key_prefix="analytics")  # Cache for 4 minutes
+    def get_user_breakdown_data(self, limit: int) -> List[UserBreakdownItem]:
+        """Get user breakdown data from database."""
+        with get_cogniforce_db() as db:
+            result = db.execute(text("""
+                SELECT
+                    user_id_hash,
+                    SUM(conversation_count) as conversations,
+                    SUM(total_time_saved) as time_saved,
+                    AVG(avg_confidence_level) as avg_confidence
+                FROM daily_aggregates
+                WHERE user_id_hash IS NOT NULL
+                GROUP BY user_id_hash
+                ORDER BY SUM(total_time_saved) DESC
+                LIMIT :limit
+            """), {"limit": limit})
+
+            users = []
+            for row in result.fetchall():
+                users.append(UserBreakdownItem(
+                    user_id_hash=row[0],
+                    user_name=self._get_user_name_from_hash(row[0]),  # Real user name
+                    conversations=row[1] or 0,
+                    time_saved=row[2] or 0,
+                    avg_confidence=float(row[3] or 0)
+                ))
+
+            return users
+
+    @track_analytics_operation("get_conversations_data")
+    @cached(ttl=120, key_prefix="analytics")  # Cache for 2 minutes
+    def get_conversations_data(self, limit: int, offset: int) -> List[ConversationItem]:
+        """Get recent conversations with analytics data."""
+        with get_cogniforce_db() as db:
+            result = db.execute(text("""
+                SELECT
+                    conversation_id,
+                    user_id_hash,
+                    first_message_at,
+                    time_saved_minutes,
+                    confidence_level,
+                    COALESCE(conversation_summary, 'No summary available') as summary
+                FROM conversation_analysis
+                ORDER BY processed_at DESC
+                LIMIT :limit OFFSET :offset
+            """), {"limit": limit, "offset": offset})
+
+            conversations = []
+            for row in result.fetchall():
+                conversations.append(ConversationItem(
+                    id=row[0],
+                    user_name=self._get_user_name_from_hash(row[1]),  # Real user name
+                    created_at=row[2].isoformat() if row[2] else datetime.now().isoformat(),
+                    time_saved=row[3] or 0,
+                    confidence=row[4] or 0,
+                    summary=row[5] or "No summary available"
+                ))
+
+            return conversations
+
+    @track_analytics_operation("get_health_status_data")
+    @cached(ttl=60, key_prefix="analytics")  # Cache for 1 minute
+    def get_health_status_data(self) -> HealthStatus:
+        """Get system health status from database."""
+        with get_cogniforce_db() as db:
+            # Get latest processing run
+            result = db.execute(text("""
+                SELECT
+                    run_date,
+                    started_at,
+                    completed_at,
+                    status,
+                    conversations_processed,
+                    conversations_failed
+                FROM processing_log
+                ORDER BY started_at DESC
+                LIMIT 1
+            """))
+
+            row = result.fetchone()
+            if row:
+                last_run = row[2].isoformat() if row[2] else None
+                status = "healthy" if row[3] == "completed" else "warning"
+            else:
+                last_run = None
+                status = "no_data"
+
+            # Next scheduled run (assuming daily processing)
+            next_run = (datetime.now().replace(hour=23, minute=0, second=0, microsecond=0) + timedelta(days=1)).isoformat()
+
+            return HealthStatus(
+                status=status,
+                last_processing_run=last_run,
+                next_scheduled_run=next_run,
+                system_info={
+                    "timezone": "UTC",
+                    "idle_threshold_minutes": 10,
+                    "processing_version": "1.0",
+                    "database_status": "connected",
+                    "llm_integration": "ready"
+                }
+            )
+
+
+# Global instance following OpenWebUI pattern
+Analytics = AnalyticsTable()

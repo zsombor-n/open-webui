@@ -1,0 +1,21 @@
+flowchart LR
+%% Groups
+    subgraph API[API Endpoints]
+        direction TB
+        endpoint1["endpoint1"]
+        endpoint2["endpoint2"]
+        endpoint3["endpoint3"]
+    end
+
+    subgraph DB[PostgreSQL Database]
+        direction TB
+        table1[(table1)]
+        table2[(table2)]
+        table3[(table3)]
+    end
+
+%% Mappings
+    endpoint1 -->|operation1| table1
+    endpoint1 -->|operation2| table2
+    endpoint2 -->|operation3| table2
+    endpoint3 -->|operation4| table3
