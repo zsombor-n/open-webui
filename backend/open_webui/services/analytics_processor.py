@@ -2,7 +2,7 @@
 Analytics Processor Service
 
 This service handles the core analytics processing pipeline:
-1. Fetches conversations from OpenWebUI database
+1. Fetches chats from OpenWebUI database
 2. Creates intelligent summaries with privacy-preserving redaction
 3. Calls GPT-5-mini API for time estimation analysis
 4. Calculates time savings metrics
@@ -14,7 +14,6 @@ The processor is designed to handle both manual triggers and scheduled runs.
 
 import json
 import time
-import hashlib
 import logging
 import asyncio
 import uuid
@@ -24,22 +23,24 @@ import re
 
 import openai
 import aiohttp
-from sqlalchemy import text
 from open_webui.internal.db import get_db
 from open_webui.internal.cogniforce_db import get_cogniforce_db
 from open_webui.cogniforce_models.analytics_tables import (
-    ConversationAnalysis, DailyAggregate, ProcessingLog
+    ChatAnalysis, DailyAggregate, ProcessingLog,
+    ChatAnalysisResult, TimeMetrics, TimeEstimates, ProcessingLogResult
 )
+from open_webui.models.chats import Chat
+from open_webui.models.users import User
 
 log = logging.getLogger(__name__)
 
 
 class AnalyticsProcessor:
     """
-    Core analytics processing engine for conversation analysis and time estimation.
+    Core analytics processing engine for chat analysis and time estimation.
 
     This processor integrates with GPT-5-mini to provide accurate manual time estimates
-    for conversations, calculating how much time users saved by using AI assistance.
+    for chats, calculating how much time users saved by using AI assistance.
     """
 
     def __init__(self, openai_api_key: str = None, model: str = "gpt-5-mini"):
@@ -63,12 +64,12 @@ class AnalyticsProcessor:
             # Will use environment variables
             self.openai_client = openai.OpenAI()
 
-    async def process_conversations_for_date(self, target_date: date) -> Dict[str, Any]:
+    async def process_chats_for_date(self, target_date: date) -> Dict[str, Any]:
         """
-        Main entry point for processing conversations for a specific date.
+        Main entry point for processing chats for a specific date.
 
         Args:
-            target_date: Date to process conversations for
+            target_date: Date to process chats for
 
         Returns:
             Processing results with statistics and metrics
@@ -88,57 +89,57 @@ class AnalyticsProcessor:
             log.info(f"[CONFIG] Max Tokens: {self.max_tokens}")
             log.info(f"[CONFIG] Idle Threshold: {self.idle_threshold_minutes} minutes")
 
-            # Fetch conversations for the target date
-            log.info("\n[STEP 1] 📥 FETCHING CONVERSATIONS...")
-            conversations = await self._fetch_conversations_for_date(target_date)
-            log.info(f"[STEP 1] ✅ Found {len(conversations)} conversations to process")
+            # Fetch chats for the target date
+            log.info("\n[STEP 1] 📥 FETCHING chatS...")
+            chats = await self._fetch_chats_for_date(target_date)
+            log.info(f"[STEP 1] ✅ Found {len(chats)} chats to process")
 
-            if conversations:
-                log.info("[STEP 1] 📋 Conversation Summary:")
-                for i, conv in enumerate(conversations, 1):
+            if chats:
+                log.info("[STEP 1] 📋 chat Summary:")
+                for i, conv in enumerate(chats, 1):
                     log.info(f"[STEP 1]   {i}. ID: {conv['id'][:8]}... | Title: {conv['title'][:50]}...")
             else:
-                log.warning("[STEP 1] ⚠️  No conversations found for processing")
+                log.warning("[STEP 1] ⚠️  No chats found for processing")
 
-            if not conversations:
+            if not chats:
                 return await self._complete_processing_log(
                     processing_log_id, processing_start,
-                    conversations_processed=0, status="completed"
+                    chats_processed=0, status="completed"
                 )
 
-            # Process each conversation
-            log.info(f"\n[STEP 2] ⚙️  PROCESSING {len(conversations)} CONVERSATIONS...")
+            # Process each chat
+            log.info(f"\n[STEP 2] ⚙️  PROCESSING {len(chats)} chatS...")
             results = []
             processed_count = 0
             failed_count = 0
             total_cost = 0.0
             total_llm_requests = 0
 
-            for i, conv_data in enumerate(conversations, 1):
+            for i, chat_data in enumerate(chats, 1):
                 try:
-                    log.info(f"\n[STEP 2.{i}] 🔄 Processing conversation {i}/{len(conversations)}")
-                    log.info(f"[STEP 2.{i}] 📝 ID: {conv_data['id']}")
-                    log.info(f"[STEP 2.{i}] 👤 User: {conv_data.get('user_name', 'Unknown')} ({conv_data.get('user_email', 'N/A')})")
-                    log.info(f"[STEP 2.{i}] 📋 Title: {conv_data.get('title', 'Untitled')}")
+                    log.info(f"\n[STEP 2.{i}] 🔄 Processing chat {i}/{len(chats)}")
+                    log.info(f"[STEP 2.{i}] 📝 ID: {chat_data['id']}")
+                    log.info(f"[STEP 2.{i}] 👤 User: {chat_data.get('user_name', 'Unknown')} ({chat_data.get('user_email', 'N/A')})")
+                    log.info(f"[STEP 2.{i}] 📋 Title: {chat_data.get('title', 'Untitled')}")
 
-                    result = await self._analyze_conversation(conv_data)
+                    result = await self._analyze_chat(chat_data)
                     if result:
                         results.append(result)
                         processed_count += 1
-                        total_cost += result.get('llm_cost', 0.0)
+                        total_cost += result.llm_cost
                         total_llm_requests += 1
 
                         log.info(f"[STEP 2.{i}] ✅ Successfully processed!")
-                        log.info(f"[STEP 2.{i}] 💰 Cost: ${result.get('llm_cost', 0.0):.4f}")
-                        log.info(f"[STEP 2.{i}] ⏱️  Time Saved: {result.get('time_saved_minutes', 0)} minutes")
-                        log.info(f"[STEP 2.{i}] 🎯 Confidence: {result.get('confidence_level', 0)}%")
+                        log.info(f"[STEP 2.{i}] 💰 Cost: ${result.llm_cost:.4f}")
+                        log.info(f"[STEP 2.{i}] ⏱️  Time Saved: {result.time_saved_minutes} minutes")
+                        log.info(f"[STEP 2.{i}] 🎯 Confidence: {result.confidence_level}%")
                     else:
                         failed_count += 1
-                        log.warning(f"[STEP 2.{i}] ❌ Failed to process conversation {conv_data['id']}")
+                        log.warning(f"[STEP 2.{i}] ❌ Failed to process chat {chat_data['id']}")
 
                 except Exception as e:
                     failed_count += 1
-                    log.error(f"[STEP 2.{i}] 💥 Error processing conversation {conv_data['id']}: {str(e)}")
+                    log.error(f"[STEP 2.{i}] 💥 Error processing chat {chat_data['id']}: {str(e)}")
                     continue
 
             # Update daily aggregates
@@ -150,28 +151,66 @@ class AnalyticsProcessor:
             log.info(f"\n[STEP 4] 📝 COMPLETING PROCESSING LOG...")
             processing_result = await self._complete_processing_log(
                 processing_log_id, processing_start,
-                conversations_processed=processed_count,
-                conversations_failed=failed_count,
+                chats_processed=processed_count,
+                chats_failed=failed_count,
                 total_llm_requests=total_llm_requests,
                 total_llm_cost_usd=total_cost,
                 status="completed"
             )
 
             # Final summary
-            total_time_saved = sum(r.get('time_saved_minutes', 0) for r in results)
-            duration_seconds = processing_result.get('duration_seconds', 0)
+            total_time_saved = sum(r.time_saved_minutes for r in results if r is not None)
+            duration_seconds = processing_result.duration_seconds
 
             log.info("=" * 60)
             log.info("🎉 ANALYTICS PROCESSING COMPLETED SUCCESSFULLY!")
             log.info("=" * 60)
-            log.info(f"[SUMMARY] 📈 Conversations Processed: {processed_count}")
-            log.info(f"[SUMMARY] ❌ Conversations Failed: {failed_count}")
+            log.info(f"[SUMMARY] 📈 chats Processed: {processed_count}")
+            log.info(f"[SUMMARY] ❌ chats Failed: {failed_count}")
             log.info(f"[SUMMARY] 🤖 OpenAI API Calls: {total_llm_requests}")
             log.info(f"[SUMMARY] 💰 Total Cost: ${total_cost:.4f}")
             log.info(f"[SUMMARY] ⏱️  Total Time Saved: {total_time_saved} minutes")
             log.info(f"[SUMMARY] ⏲️  Processing Duration: {duration_seconds} seconds")
             log.info(f"[SUMMARY] 📊 Processing Log ID: {processing_log_id}")
             log.info("=" * 60)
+
+            # Invalidate analytics cache after successful processing
+            log.info("🔄 Invalidating analytics cache after successful processing...")
+            try:
+                from open_webui.cogniforce_models.analytics_tables import Analytics
+
+                # Use the decorator's invalidate_cache method for each cached function
+                # Invalidate summary data (no parameters)
+                Analytics.get_summary_data.invalidate_cache(Analytics)
+
+                # Invalidate common daily trend periods
+                for days in [7, 30, 90]:
+                    try:
+                        Analytics.get_daily_trend_data.invalidate_cache(Analytics, days)
+                    except:
+                        pass
+
+                # Invalidate common user breakdown limits
+                for limit in [10, 20, 50]:
+                    try:
+                        Analytics.get_user_breakdown_data.invalidate_cache(Analytics, limit)
+                    except:
+                        pass
+
+                # Invalidate common chat data pages
+                for limit in [20, 50, 100]:
+                    for offset in [0, 20, 40]:
+                        try:
+                            Analytics.get_chats_data.invalidate_cache(Analytics, limit, offset)
+                        except:
+                            pass
+
+                # Invalidate health status (no parameters)
+                Analytics.get_health_status_data.invalidate_cache(Analytics)
+
+                log.info("✅ Cache invalidation completed using decorator methods")
+            except Exception as cache_error:
+                log.warning(f"Cache invalidation failed: {cache_error}")
 
             return processing_result
 
@@ -184,82 +223,70 @@ class AnalyticsProcessor:
             log.error(f"Analytics processing failed: {str(e)}")
             raise
 
-    async def _fetch_conversations_for_date(self, target_date: date) -> List[Dict[str, Any]]:
+    async def _fetch_chats_for_date(self, target_date: date) -> List[Dict[str, Any]]:
         """
-        Fetch conversations from OpenWebUI database for the target date.
+        Fetch chats from OpenWebUI database for the target date.
 
-        For development: fetches ALL conversations since we only have 2 test conversations.
+        For development: fetches ALL chats since we only have 2 test chats.
         In production: would filter by date.
 
         Args:
-            target_date: Date to fetch conversations for
+            target_date: Date to fetch chats for
 
         Returns:
-            List of conversation data dictionaries
+            List of chat data dictionaries
         """
         try:
             with get_db() as db:
-                # For development: get ALL conversations (we only have 2)
-                # In production: add date filtering
-                result = db.execute(text("""
-                    SELECT
-                        c.id,
-                        c.user_id,
-                        c.title,
-                        c.chat,
-                        c.created_at,
-                        c.updated_at,
-                        u.email as user_email,
-                        u.name as user_name
-                    FROM chat c
-                    JOIN "user" u ON c.user_id = u.id
-                    ORDER BY c.created_at DESC
-                """))
+                # Use SQLAlchemy ORM to join chats with users
+                query_results = db.query(Chat, User).join(
+                    User, Chat.user_id == User.id
+                ).order_by(Chat.created_at.desc()).all()
 
-                conversations = []
-                for row in result.fetchall():
-                    conversations.append({
-                        'id': row[0],
-                        'user_id': row[1],
-                        'title': row[2],
-                        'chat': row[3],
-                        'created_at': row[4],
-                        'updated_at': row[5],
-                        'user_email': row[6],
-                        'user_name': row[7]
+                chats = []
+                for chat, user in query_results:
+                    chats.append({
+                        'id': chat.id,
+                        'user_id': chat.user_id,
+                        'title': chat.title,
+                        'chat': chat.chat,
+                        'created_at': chat.created_at,
+                        'updated_at': chat.updated_at,
+                        'user_email': user.email,
+                        'user_name': user.name
                     })
 
-                return conversations
+                return chats
 
         except Exception as e:
-            log.error(f"Failed to fetch conversations: {str(e)}")
+            log.error(f"Failed to fetch chats: {str(e)}")
             raise
 
-    async def _analyze_conversation(self, conv_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _analyze_chat(self, conv_data: Dict[str, Any]) -> Optional[ChatAnalysisResult]:
         """
-        Analyze a single conversation using GPT-5-mini.
+        Analyze a single chat using GPT-5-mini.
 
         Args:
-            conv_data: Conversation data from database
+            conv_data: chat data from database
 
         Returns:
             Analysis results or None if failed
         """
         try:
-            # Extract conversation details
-            conversation_id = conv_data['id']
+            # Extract chat details
+            chat_id = conv_data['id']
             chat_data = conv_data['chat']
 
-            log.info(f"    📊 EXTRACTING CONVERSATION DATA...")
-            log.info(f"    📝 Conversation ID: {conversation_id}")
+            log.info(f"    📊 EXTRACTING chat DATA...")
+            log.info(f"    📝 chat ID: {chat_id}")
 
             if not chat_data or 'messages' not in chat_data:
-                log.warning(f"    ⚠️  No messages found in conversation {conversation_id}")
+                log.warning(f"    ⚠️  No messages found in chat {chat_id}")
                 return None
 
             messages = chat_data['messages']
             if not messages:
-                log.warning(f"    ⚠️  Empty messages list for conversation {conversation_id}")
+                log.warning(f"    ⚠️  Empty messages list for chat {chat_id}")
                 return None
 
             log.info(f"    💬 Messages found: {len(messages)}")
@@ -267,16 +294,16 @@ class AnalyticsProcessor:
             # Calculate time metrics
             log.info(f"    ⏱️  CALCULATING TIME METRICS...")
             time_metrics = self._calculate_time_metrics(messages, conv_data)
-            log.info(f"    ⏱️  First message: {time_metrics['first_message_at']}")
-            log.info(f"    ⏱️  Last message: {time_metrics['last_message_at']}")
-            log.info(f"    ⏱️  Total duration: {time_metrics['total_duration_minutes']} minutes")
-            log.info(f"    ⏱️  Active duration: {time_metrics['active_duration_minutes']} minutes")
-            log.info(f"    ⏱️  Idle time: {time_metrics['idle_time_minutes']} minutes")
+            log.info(f"    ⏱️  First message: {time_metrics.first_message_at}")
+            log.info(f"    ⏱️  Last message: {time_metrics.last_message_at}")
+            log.info(f"    ⏱️  Total duration: {time_metrics.total_duration_minutes} minutes")
+            log.info(f"    ⏱️  Active duration: {time_metrics.active_duration_minutes} minutes")
+            log.info(f"    ⏱️  Idle time: {time_metrics.idle_time_minutes} minutes")
 
             # Create smart summary for LLM analysis
             log.info(f"    📝 CREATING SMART SUMMARY...")
-            conversation_summary = self._create_smart_summary(conv_data, messages)
-            log.info(f"    📝 Summary length: {len(conversation_summary)} characters")
+            chat_summary = self._create_smart_summary(conv_data, messages)
+            log.info(f"    📝 Summary length: {len(chat_summary)} characters")
 
             # Get time estimation from GPT-5-mini
             log.info(f"    🤖 CALLING GPT-5-MINI API...")
@@ -284,10 +311,10 @@ class AnalyticsProcessor:
             log.info(f"    🤖 Temperature: default (1) - GPT-5-mini requirement")
             log.info(f"    🤖 Max Completion Tokens: {self.max_tokens}")
 
-            llm_response = await self._estimate_manual_time(conversation_summary)
+            llm_response = await self._estimate_manual_time(chat_summary)
 
             if not llm_response:
-                log.error(f"    ❌ Failed to get LLM response for conversation {conversation_id}")
+                log.error(f"    ❌ Failed to get LLM response for chat {chat_id}")
                 return None
 
             log.info(f"    🤖 ✅ GPT-5-mini response received!")
@@ -295,15 +322,15 @@ class AnalyticsProcessor:
             # Parse LLM response
             log.info(f"    🔍 PARSING TIME ESTIMATES...")
             time_estimates = self._parse_time_estimates(llm_response)
-            log.info(f"    🔍 Low estimate: {time_estimates.get('low', 0)} minutes")
-            log.info(f"    🔍 Most likely: {time_estimates.get('most_likely', 0)} minutes")
-            log.info(f"    🔍 High estimate: {time_estimates.get('high', 0)} minutes")
-            log.info(f"    🔍 Confidence: {time_estimates.get('confidence', 0)}%")
+            log.info(f"    🔍 Low estimate: {time_estimates.low} minutes")
+            log.info(f"    🔍 Most likely: {time_estimates.most_likely} minutes")
+            log.info(f"    🔍 High estimate: {time_estimates.high} minutes")
+            log.info(f"    🔍 Confidence: {time_estimates.confidence}%")
 
             # Calculate time saved
             log.info(f"    📈 CALCULATING TIME SAVINGS...")
-            manual_time_most_likely = time_estimates.get('most_likely', 0)
-            active_duration = time_metrics['active_duration_minutes']
+            manual_time_most_likely = time_estimates.most_likely
+            active_duration = time_metrics.active_duration_minutes
             time_saved = max(0, manual_time_most_likely - active_duration)
             log.info(f"    📈 Manual estimate: {manual_time_most_likely} minutes")
             log.info(f"    📈 AI-assisted time: {active_duration} minutes")
@@ -311,52 +338,59 @@ class AnalyticsProcessor:
 
             # Store analysis results
             log.info(f"    💾 STORING ANALYSIS RESULTS...")
+            # Calculate chat date from creation timestamp
+            chat_date = datetime.fromtimestamp(conv_data['created_at']).date()
+
             analysis_id = await self._store_analysis_results(
-                conversation_id=conversation_id,
-                user_email=conv_data['user_email'],
+                chat_id=chat_id,
+                user_id=conv_data['user_id'],
+                chat_date=chat_date,
                 time_metrics=time_metrics,
                 time_estimates=time_estimates,
                 time_saved_minutes=time_saved,
-                conversation_summary=conversation_summary,
+                chat_summary=chat_summary,
                 llm_response=llm_response,
                 message_count=len(messages)
             )
             log.info(f"    💾 ✅ Analysis stored with ID: {analysis_id}")
 
-            return {
-                'analysis_id': analysis_id,
-                'conversation_id': conversation_id,
-                'time_saved_minutes': time_saved,
-                'active_duration_minutes': time_metrics['active_duration_minutes'],
-                'manual_time_most_likely': time_estimates.get('most_likely', 0),
-                'message_count': len(messages),
-                'confidence_level': time_estimates.get('confidence', 0),
-                'llm_cost': 0.001  # Estimated cost per request for GPT-5-mini
-            }
+            return ChatAnalysisResult(
+                analysis_id=analysis_id,
+                chat_id=chat_id,
+                chat_date=chat_date,
+                user_id=str(conv_data['user_id']),
+                time_saved_minutes=time_saved,
+                active_duration_minutes=time_metrics.active_duration_minutes,
+                manual_time_most_likely=time_estimates.most_likely,
+                message_count=len(messages),
+                confidence_level=time_estimates.confidence,
+                llm_cost=0.001  # Estimated cost per request for GPT-5-mini
+            )
 
         except Exception as e:
-            log.error(f"Error analyzing conversation {conv_data.get('id', 'unknown')}: {str(e)}")
+            log.error(f"Error analyzing chat {conv_data.get('id', 'unknown')}: {str(e)}")
             return None
 
-    def _calculate_time_metrics(self, messages: List[Dict], conv_data: Dict) -> Dict[str, Any]:
+    def _calculate_time_metrics(self, messages: List[Dict], conv_data: Dict) -> TimeMetrics:
         """
-        Calculate timing metrics for the conversation.
+        Calculate timing metrics for the chat.
 
         Args:
-            messages: List of conversation messages
-            conv_data: Conversation metadata
+            messages: List of chat messages
+            conv_data: chat metadata
 
         Returns:
             Dictionary with timing metrics
         """
         if not messages:
-            return {
-                'first_message_at': datetime.now(),
-                'last_message_at': datetime.now(),
-                'total_duration_minutes': 0,
-                'active_duration_minutes': 0,
-                'idle_time_minutes': 0
-            }
+            now = datetime.now()
+            return TimeMetrics(
+                first_message_at=now,
+                last_message_at=now,
+                total_duration_minutes=0,
+                active_duration_minutes=0,
+                idle_time_minutes=0
+            )
 
         # Extract timestamps
         timestamps = []
@@ -382,13 +416,13 @@ class AnalyticsProcessor:
         # Calculate idle time
         idle_time_minutes = max(0, total_duration_minutes - active_duration_minutes)
 
-        return {
-            'first_message_at': first_message_at,
-            'last_message_at': last_message_at,
-            'total_duration_minutes': total_duration_minutes,
-            'active_duration_minutes': active_duration_minutes,
-            'idle_time_minutes': idle_time_minutes
-        }
+        return TimeMetrics(
+            first_message_at=first_message_at,
+            last_message_at=last_message_at,
+            total_duration_minutes=total_duration_minutes,
+            active_duration_minutes=active_duration_minutes,
+            idle_time_minutes=idle_time_minutes
+        )
 
     def _calculate_active_duration(self, timestamps: List[datetime]) -> int:
         """
@@ -424,14 +458,14 @@ class AnalyticsProcessor:
         Preserves public/historical information while redacting private data.
 
         Args:
-            conv_data: Conversation metadata
+            conv_data: chat metadata
             messages: List of messages
 
         Returns:
-            Redacted conversation summary
+            Redacted chat summary
         """
-        # Extract conversation content
-        title = conv_data.get('title', 'Untitled Conversation')
+        # Extract chat content
+        title = conv_data.get('title', 'Untitled chat')
         user_messages = [msg.get('content', '') for msg in messages if msg.get('role') == 'user']
         assistant_messages = [msg.get('content', '') for msg in messages if msg.get('role') == 'assistant']
 
@@ -444,7 +478,7 @@ class AnalyticsProcessor:
         redacted_summary = self._apply_smart_redaction(full_content)
 
         # Add metadata for context
-        summary = f"""Conversation Analysis Summary:
+        summary = f"""chat Analysis Summary:
 
 Topic: {title}
 Message Count: {len(messages)}
@@ -454,7 +488,7 @@ Assistant Messages: {len(assistant_messages)}
 Content Overview:
 {redacted_summary}
 
-This conversation required the user to engage in back-and-forth dialogue with an AI assistant to complete their task."""
+This chat required the user to engage in back-and-forth dialogue with an AI assistant to complete their task."""
 
         return summary
 
@@ -497,19 +531,19 @@ This conversation required the user to engage in back-and-forth dialogue with an
 
         return redacted.strip()
 
-    async def _estimate_manual_time(self, conversation_summary: str) -> Optional[Dict[str, Any]]:
+    async def _estimate_manual_time(self, chat_summary: str) -> Optional[Dict[str, Any]]:
         """
         Use GPT-5-mini to estimate manual completion time.
 
         Args:
-            conversation_summary: Redacted conversation summary
+            chat_summary: Redacted chat summary
 
         Returns:
             LLM response with time estimates or None if failed
         """
         system_prompt = """You are an expert at estimating how long tasks would take to complete manually without AI assistance.
 
-Analyze the provided conversation summary and estimate how long it would have taken the user to complete the same task manually through research, writing, coding, or other methods.
+Analyze the provided chat summary and estimate how long it would have taken the user to complete the same task manually through research, writing, coding, or other methods.
 
 IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other text):
 {
@@ -530,14 +564,14 @@ Consider factors like:
         try:
             log.info(f"        🔄 Making API call to {self.model}...")
             log.info(f"        📝 System prompt length: {len(system_prompt)} characters")
-            log.info(f"        📝 User content length: {len(conversation_summary)} characters")
+            log.info(f"        📝 User content length: {len(chat_summary)} characters")
             log.info(f"        🔑 API key configured: {'Yes' if self.openai_api_key else 'Using env var'}")
 
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},  # GPT-5-mini uses standard "system" role
-                    {"role": "user", "content": conversation_summary}
+                    {"role": "user", "content": chat_summary}
                 ],
                 # temperature removed - GPT-5-mini only supports default value (1)
                 max_completion_tokens=self.max_tokens  # Updated parameter for GPT-5-mini
@@ -625,20 +659,20 @@ Consider factors like:
             log.error(f"        📋 Full traceback: {traceback.format_exc()}")
             return None
 
-    async def _estimate_manual_time_http(self, conversation_summary: str) -> Optional[Dict[str, Any]]:
+    async def _estimate_manual_time_http(self, chat_summary: str) -> Optional[Dict[str, Any]]:
         """
         Estimate manual completion time using direct HTTP calls to GPT-5-mini API.
         This bypasses the OpenAI Python library parsing issue with GPT-5-mini responses.
 
         Args:
-            conversation_summary: Redacted conversation summary
+            chat_summary: Redacted chat summary
 
         Returns:
             LLM response with time estimates or None if failed
         """
         system_prompt = """You are an expert at estimating how long tasks would take to complete manually without AI assistance.
 
-Analyze the provided conversation summary and estimate how long it would have taken the user to complete the same task manually through research, writing, coding, or other methods.
+Analyze the provided chat summary and estimate how long it would have taken the user to complete the same task manually through research, writing, coding, or other methods.
 
 IMPORTANT: You MUST respond with ONLY valid JSON in this exact format (no other text):
 {
@@ -660,7 +694,7 @@ Consider factors like:
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": conversation_summary}
+                {"role": "user", "content": chat_summary}
             ],
             "max_completion_tokens": self.max_tokens
         }
@@ -673,7 +707,7 @@ Consider factors like:
         try:
             log.info(f"        🔄 Making direct HTTP call to {self.model}...")
             log.info(f"        📝 System prompt length: {len(system_prompt)} characters")
-            log.info(f"        📝 User content length: {len(conversation_summary)} characters")
+            log.info(f"        📝 User content length: {len(chat_summary)} characters")
             log.info(f"        🔑 API key configured: {'Yes' if self.openai_api_key else 'No'}")
 
             async with aiohttp.ClientSession() as session:
@@ -759,7 +793,7 @@ Consider factors like:
             log.error(f"        📋 Full traceback: {traceback.format_exc()}")
             return None
 
-    def _parse_time_estimates(self, llm_response: Dict[str, Any]) -> Dict[str, Any]:
+    def _parse_time_estimates(self, llm_response: Dict[str, Any]) -> TimeEstimates:
         """
         Parse and validate time estimates from LLM response.
 
@@ -770,69 +804,66 @@ Consider factors like:
             Validated time estimates
         """
         try:
-            return {
-                'low': max(0, int(llm_response.get('manual_time_low', 0))),
-                'most_likely': max(0, int(llm_response.get('manual_time_most_likely', 0))),
-                'high': max(0, int(llm_response.get('manual_time_high', 0))),
-                'confidence': max(0, min(100, int(llm_response.get('confidence_level', 0))))
-            }
+            return TimeEstimates(
+                low=max(0, int(llm_response.get('manual_time_low', 0))),
+                most_likely=max(0, int(llm_response.get('manual_time_most_likely', 0))),
+                high=max(0, int(llm_response.get('manual_time_high', 0))),
+                confidence=max(0, min(100, int(llm_response.get('confidence_level', 0))))
+            )
         except (ValueError, TypeError):
             log.warning("Failed to parse time estimates, using defaults")
-            return {
-                'low': 0,
-                'most_likely': 0,
-                'high': 0,
-                'confidence': 0
-            }
+            return TimeEstimates(
+                low=0,
+                most_likely=0,
+                high=0,
+                confidence=0
+            )
 
     async def _store_analysis_results(self, **kwargs) -> str:
         """
-        Store conversation analysis results in the database.
+        Store chat analysis results in the database.
 
         Returns:
             Analysis record ID
         """
         try:
             with get_cogniforce_db() as db:
-                # Hash user email for privacy
-                user_email = kwargs['user_email']
-                user_id_hash = hashlib.sha256(user_email.encode()).hexdigest()
-
                 # Create analysis record
-                analysis = ConversationAnalysis(
-                    conversation_id=kwargs['conversation_id'],
-                    user_id_hash=user_id_hash,
-                    first_message_at=kwargs['time_metrics']['first_message_at'],
-                    last_message_at=kwargs['time_metrics']['last_message_at'],
-                    total_duration_minutes=kwargs['time_metrics']['total_duration_minutes'],
-                    active_duration_minutes=kwargs['time_metrics']['active_duration_minutes'],
-                    idle_time_minutes=kwargs['time_metrics']['idle_time_minutes'],
-                    manual_time_low=kwargs['time_estimates']['low'],
-                    manual_time_most_likely=kwargs['time_estimates']['most_likely'],
-                    manual_time_high=kwargs['time_estimates']['high'],
-                    confidence_level=kwargs['time_estimates']['confidence'],
+                analysis = ChatAnalysis(
+                    chat_id=kwargs['chat_id'],
+                    user_id=kwargs['user_id'],
+                    chat_date=kwargs['chat_date'],
+                    first_message_at=kwargs['time_metrics'].first_message_at,
+                    last_message_at=kwargs['time_metrics'].last_message_at,
+                    total_duration_minutes=kwargs['time_metrics'].total_duration_minutes,
+                    active_duration_minutes=kwargs['time_metrics'].active_duration_minutes,
+                    idle_time_minutes=kwargs['time_metrics'].idle_time_minutes,
+                    manual_time_low=kwargs['time_estimates'].low,
+                    manual_time_most_likely=kwargs['time_estimates'].most_likely,
+                    manual_time_high=kwargs['time_estimates'].high,
+                    confidence_level=kwargs['time_estimates'].confidence,
                     time_saved_minutes=kwargs['time_saved_minutes'],
                     message_count=kwargs['message_count'],
-                    conversation_summary=kwargs['conversation_summary'],
+                    chat_summary=kwargs['chat_summary'],
                     llm_response=kwargs['llm_response']
                 )
 
                 db.add(analysis)
                 db.commit()
 
-                log.info(f"Stored analysis results for conversation {kwargs['conversation_id']}")
+                log.info(f"Stored analysis results for chat {kwargs['chat_id']}")
                 return str(analysis.id)
 
         except Exception as e:
             log.error(f"Failed to store analysis results: {str(e)}")
             raise
 
-    async def _create_processing_log(self, run_date: date, started_at: datetime) -> str:
+    async def _create_processing_log(self, target_date: date, started_at: datetime) -> str:
         """Create processing log entry and return its ID."""
         try:
             with get_cogniforce_db() as db:
                 log_entry = ProcessingLog(
-                    run_date=run_date,
+                    target_date=target_date,
                     started_at=started_at,
                     status='running'
                 )
@@ -843,94 +874,161 @@ Consider factors like:
             log.error(f"Failed to create processing log: {str(e)}")
             raise
 
-    async def _complete_processing_log(self, log_id: str, started_at: datetime, **kwargs) -> Dict[str, Any]:
+    async def _complete_processing_log(self, log_id: str, started_at: datetime, **kwargs) -> ProcessingLogResult:
         """Complete processing log with final statistics."""
         try:
             with get_cogniforce_db() as db:
                 completed_at = datetime.now()
                 duration_seconds = int((completed_at - started_at).total_seconds())
 
-                db.execute(text("""
-                    UPDATE processing_log
-                    SET completed_at = :completed_at,
-                        status = :status,
-                        conversations_processed = :conversations_processed,
-                        conversations_failed = :conversations_failed,
-                        total_llm_requests = :total_llm_requests,
-                        total_llm_cost_usd = :total_llm_cost_usd,
-                        processing_duration_seconds = :processing_duration_seconds,
-                        error_message = :error_message
-                    WHERE id = :log_id
-                """), {
-                    'log_id': log_id,
-                    'completed_at': completed_at,
-                    'status': kwargs.get('status', 'completed'),
-                    'conversations_processed': kwargs.get('conversations_processed', 0),
-                    'conversations_failed': kwargs.get('conversations_failed', 0),
-                    'total_llm_requests': kwargs.get('total_llm_requests', 0),
-                    'total_llm_cost_usd': kwargs.get('total_llm_cost_usd', 0.0),
-                    'processing_duration_seconds': duration_seconds,
-                    'error_message': kwargs.get('error_message')
-                })
+                # Update processing log using SQLAlchemy ORM
+                processing_log = db.query(ProcessingLog).filter_by(id=log_id).first()
+                if processing_log:
+                    processing_log.completed_at = completed_at
+                    processing_log.status = kwargs.get('status', 'completed')
+                    processing_log.chats_processed = kwargs.get('chats_processed', 0)
+                    processing_log.chats_failed = kwargs.get('chats_failed', 0)
+                    processing_log.total_llm_requests = kwargs.get('total_llm_requests', 0)
+                    processing_log.total_llm_cost_usd = kwargs.get('total_llm_cost_usd', 0.0)
+                    processing_log.processing_duration_seconds = duration_seconds
+                    processing_log.error_message = kwargs.get('error_message')
                 db.commit()
 
-                return {
-                    'processing_log_id': log_id,
-                    'status': kwargs.get('status', 'completed'),
-                    'duration_seconds': duration_seconds,
-                    'conversations_processed': kwargs.get('conversations_processed', 0),
-                    'conversations_failed': kwargs.get('conversations_failed', 0),
-                    'total_cost_usd': kwargs.get('total_llm_cost_usd', 0.0)
-                }
+                return ProcessingLogResult(
+                    processing_log_id=log_id,
+                    status=kwargs.get('status', 'completed'),
+                    duration_seconds=duration_seconds,
+                    chats_processed=kwargs.get('chats_processed', 0),
+                    chats_failed=kwargs.get('chats_failed', 0),
+                    total_cost_usd=kwargs.get('total_llm_cost_usd', 0.0)
+                )
 
         except Exception as e:
             log.error(f"Failed to complete processing log: {str(e)}")
             raise
 
-    async def _update_daily_aggregates(self, target_date: date, results: List[Dict]) -> None:
-        """Update daily aggregates with processing results."""
+    async def _update_daily_aggregates(self, target_date: date, results: List[ChatAnalysisResult]) -> None:
+        """Update daily aggregates with processing results grouped by chat_date."""
         if not results:
             return
 
         try:
             with get_cogniforce_db() as db:
-                # Global aggregate (user_id_hash = NULL)
-                total_conversations = len(results)
-                total_time_saved = sum(r['time_saved_minutes'] for r in results)
-                total_messages = sum(r.get('message_count', 0) for r in results)
-                total_active_time = sum(r.get('active_duration_minutes', 0) for r in results)
-                total_manual_time_estimated = sum(r.get('manual_time_most_likely', 0) for r in results)
-                avg_confidence = sum(r['confidence_level'] for r in results) / len(results)
+                # Group results by their actual chat date (not processing date)
+                valid_results = [r for r in results if r is not None]
+                results_by_date = {}
 
-                # Insert or update global aggregate
-                aggregate_id = str(uuid.uuid4())
-                db.execute(text("""
-                    INSERT INTO daily_aggregates
-                    (id, analysis_date, user_id_hash, conversation_count, message_count, total_time_saved, total_active_time, total_manual_time_estimated, avg_confidence_level)
-                    VALUES (:id, :date, NULL, :conversations, :messages, :time_saved, :active_time, :manual_time, :confidence)
-                    ON CONFLICT (analysis_date, user_id_hash)
-                    DO UPDATE SET
-                        conversation_count = daily_aggregates.conversation_count + EXCLUDED.conversation_count,
-                        message_count = daily_aggregates.message_count + EXCLUDED.message_count,
-                        total_time_saved = daily_aggregates.total_time_saved + EXCLUDED.total_time_saved,
-                        total_active_time = daily_aggregates.total_active_time + EXCLUDED.total_active_time,
-                        total_manual_time_estimated = daily_aggregates.total_manual_time_estimated + EXCLUDED.total_manual_time_estimated,
-                        avg_confidence_level = (daily_aggregates.avg_confidence_level + EXCLUDED.avg_confidence_level) / 2,
-                        updated_at = :updated_at
-                """), {
-                    'id': aggregate_id,
-                    'date': target_date,
-                    'conversations': total_conversations,
-                    'messages': total_messages,
-                    'time_saved': total_time_saved,
-                    'active_time': total_active_time,
-                    'manual_time': total_manual_time_estimated,
-                    'confidence': avg_confidence,
-                    'updated_at': datetime.now()
-                })
+                for result in valid_results:
+                    chat_date = result.chat_date
+                    if chat_date not in results_by_date:
+                        results_by_date[chat_date] = []
+                    results_by_date[chat_date].append(result)
+
+                # Update aggregates for each chat date
+                for chat_date, date_results in results_by_date.items():
+                    total_chats = len(date_results)
+                    total_time_saved = sum(r.time_saved_minutes for r in date_results)
+                    total_messages = sum(r.message_count for r in date_results)
+                    total_active_time = sum(r.active_duration_minutes for r in date_results)
+                    total_manual_time_estimated = sum(r.manual_time_most_likely for r in date_results)
+                    avg_confidence = sum(r.confidence_level for r in date_results) / len(date_results)
+
+                    # Insert or update global aggregate using SQLAlchemy ORM
+                    existing_aggregate = db.query(DailyAggregate).filter_by(
+                        analysis_date=chat_date,  # Use actual chat date, not processing date
+                        user_id=None
+                    ).first()
+
+                    if existing_aggregate:
+                        # Update existing record
+                        existing_aggregate.chat_count += total_chats
+                        existing_aggregate.message_count += total_messages
+                        existing_aggregate.total_time_saved += total_time_saved
+                        existing_aggregate.total_active_time += total_active_time
+                        existing_aggregate.total_manual_time_estimated += total_manual_time_estimated
+                        # Update average confidence (weighted average)
+                        existing_weight = existing_aggregate.chat_count - total_chats
+                        if existing_weight > 0:
+                            existing_aggregate.avg_confidence_level = (
+                                (existing_aggregate.avg_confidence_level * existing_weight + avg_confidence * total_chats)
+                                / existing_aggregate.chat_count
+                            )
+                        else:
+                            existing_aggregate.avg_confidence_level = avg_confidence
+                        existing_aggregate.updated_at = datetime.now()
+                    else:
+                        # Create new record
+                        new_aggregate = DailyAggregate(
+                            id=uuid.uuid4(),
+                            analysis_date=chat_date,  # Use actual chat date, not processing date
+                            user_id=None,
+                            chat_count=total_chats,
+                            message_count=total_messages,
+                            total_time_saved=total_time_saved,
+                            total_active_time=total_active_time,
+                            total_manual_time_estimated=total_manual_time_estimated,
+                            avg_confidence_level=avg_confidence,
+                            created_at=datetime.now(),
+                            updated_at=datetime.now()
+                        )
+                        db.add(new_aggregate)
+
+                    log.info(f"Updated daily aggregates for chat date: {chat_date} (processed on {target_date})")
+
+                    # Also create per-user aggregates for this date
+                    results_by_user = {}
+                    for result in date_results:
+                        user_id = result.user_id
+                        if user_id not in results_by_user:
+                            results_by_user[user_id] = []
+                        results_by_user[user_id].append(result)
+
+                    # Create or update per-user aggregates
+                    for user_id, user_results in results_by_user.items():
+                        user_total_chats = len(user_results)
+                        user_total_time_saved = sum(r.time_saved_minutes for r in user_results)
+                        user_total_messages = sum(r.message_count for r in user_results)
+                        user_total_active_time = sum(r.active_duration_minutes for r in user_results)
+                        user_total_manual_time_estimated = sum(r.manual_time_most_likely for r in user_results)
+                        user_avg_confidence = sum(r.confidence_level for r in user_results) / len(user_results)
+
+                        # Check if per-user aggregate exists
+                        existing_user_aggregate = db.query(DailyAggregate).filter_by(
+                            analysis_date=chat_date,
+                            user_id=user_id
+                        ).first()
+
+                        if existing_user_aggregate:
+                            # Update existing per-user aggregate
+                            existing_user_aggregate.chat_count += user_total_chats
+                            existing_user_aggregate.total_time_saved += user_total_time_saved
+                            existing_user_aggregate.message_count += user_total_messages
+                            existing_user_aggregate.total_active_time += user_total_active_time
+                            existing_user_aggregate.total_manual_time_estimated += user_total_manual_time_estimated
+                            # Recalculate average confidence
+                            existing_user_aggregate.avg_confidence_level = user_avg_confidence
+                            existing_user_aggregate.updated_at = datetime.now()
+                        else:
+                            # Create new per-user aggregate
+                            new_user_aggregate = DailyAggregate(
+                                id=uuid.uuid4(),
+                                analysis_date=chat_date,
+                                user_id=user_id,  # Set to actual user UUID
+                                chat_count=user_total_chats,
+                                message_count=user_total_messages,
+                                total_time_saved=user_total_time_saved,
+                                total_active_time=user_total_active_time,
+                                total_manual_time_estimated=user_total_manual_time_estimated,
+                                avg_confidence_level=user_avg_confidence,
+                                created_at=datetime.now(),
+                                updated_at=datetime.now()
+                            )
+                            db.add(new_user_aggregate)
+
+                        log.debug(f"Updated per-user aggregate for user {str(user_id)[:8]}... on {chat_date}")
 
                 db.commit()
-                log.info(f"Updated daily aggregates for {target_date}")
+                log.info(f"Updated daily aggregates for {len(results_by_date)} different chat dates")
 
         except Exception as e:
             log.error(f"Failed to update daily aggregates: {str(e)}")

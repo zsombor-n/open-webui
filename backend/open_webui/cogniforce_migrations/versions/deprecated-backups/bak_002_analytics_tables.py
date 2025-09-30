@@ -22,13 +22,13 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Create analytics tables for time savings analysis."""
 
-    # Create conversation_analysis table
+    # Create chat_analysis table
     op.create_table(
-        'conversation_analysis',
+        'chat_analysis',
         sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
 
-        # Source conversation identification
-        sa.Column('conversation_id', sa.String(255), nullable=False),
+        # Source chat identification
+        sa.Column('chat_id', sa.String(255), nullable=False),
         sa.Column('user_id_hash', sa.String(64), nullable=False),
 
         # Timing analysis
@@ -53,11 +53,11 @@ def upgrade() -> None:
         sa.Column('processing_version', sa.String(20), nullable=True),
 
         # Analysis data
-        sa.Column('conversation_summary', sa.Text(), nullable=True),
+        sa.Column('chat_summary', sa.Text(), nullable=True),
         sa.Column('llm_response', JSONField(), nullable=True),
 
         sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('conversation_id'),
+        sa.UniqueConstraint('chat_id'),
 
         # Check constraints
         sa.CheckConstraint(
@@ -88,14 +88,14 @@ def upgrade() -> None:
         sa.Column('user_id_hash', sa.String(64), nullable=True),  # NULL for global aggregates
 
         # Counts
-        sa.Column('conversation_count', sa.Integer(), nullable=False, default=0),
+        sa.Column('chat_count', sa.Integer(), nullable=False, default=0),
         sa.Column('message_count', sa.Integer(), nullable=False, default=0),
 
         # Time metrics (in minutes)
         sa.Column('total_active_time', sa.Integer(), nullable=False, default=0),
         sa.Column('total_manual_time_estimated', sa.Integer(), nullable=False, default=0),
         sa.Column('total_time_saved', sa.Integer(), nullable=False, default=0),
-        sa.Column('avg_time_saved_per_conversation', sa.Float(), nullable=True),
+        sa.Column('avg_time_saved_per_chat', sa.Float(), nullable=True),
 
         # Confidence metrics
         sa.Column('avg_confidence_level', sa.Float(), nullable=True),
@@ -109,7 +109,7 @@ def upgrade() -> None:
 
         # Check constraints
         sa.CheckConstraint(
-            'conversation_count >= 0 AND '
+            'chat_count >= 0 AND '
             'message_count >= 0 AND '
             'total_active_time >= 0 AND '
             'total_time_saved >= 0',
@@ -129,9 +129,9 @@ def upgrade() -> None:
         sa.Column('status', sa.String(20), nullable=False, default='running'),
 
         # Processing statistics
-        sa.Column('conversations_processed', sa.Integer(), nullable=True, default=0),
-        sa.Column('conversations_skipped', sa.Integer(), nullable=True, default=0),
-        sa.Column('conversations_failed', sa.Integer(), nullable=True, default=0),
+        sa.Column('chats_processed', sa.Integer(), nullable=True, default=0),
+        sa.Column('chats_skipped', sa.Integer(), nullable=True, default=0),
+        sa.Column('chats_failed', sa.Integer(), nullable=True, default=0),
 
         # Performance metrics
         sa.Column('total_llm_requests', sa.Integer(), nullable=True, default=0),
@@ -148,24 +148,24 @@ def upgrade() -> None:
 
         # Check constraints
         sa.CheckConstraint(
-            'conversations_processed >= 0 AND '
-            'conversations_skipped >= 0 AND '
-            'conversations_failed >= 0',
+            'chats_processed >= 0 AND '
+            'chats_skipped >= 0 AND '
+            'chats_failed >= 0',
             name='positive_processing_counts'
         )
     )
 
     # Create indexes for performance
 
-    # Conversation analysis indexes
+    # chat analysis indexes
     op.create_index(
-        'idx_conversation_analysis_user_date',
-        'conversation_analysis',
+        'idx_chat_analysis_user_date',
+        'chat_analysis',
         ['user_id_hash', 'processed_at']
     )
     op.create_index(
-        'idx_conversation_analysis_processed_at',
-        'conversation_analysis',
+        'idx_chat_analysis_processed_at',
+        'chat_analysis',
         ['processed_at']
     )
 
@@ -190,10 +190,10 @@ def downgrade() -> None:
     # Drop indexes first
     op.drop_index('idx_processing_log_run_date', table_name='processing_log')
     op.drop_index('idx_daily_aggregates_date', table_name='daily_aggregates')
-    op.drop_index('idx_conversation_analysis_processed_at', table_name='conversation_analysis')
-    op.drop_index('idx_conversation_analysis_user_date', table_name='conversation_analysis')
+    op.drop_index('idx_chat_analysis_processed_at', table_name='chat_analysis')
+    op.drop_index('idx_chat_analysis_user_date', table_name='chat_analysis')
 
     # Drop tables
     op.drop_table('processing_log')
     op.drop_table('daily_aggregates')
-    op.drop_table('conversation_analysis')
+    op.drop_table('chat_analysis')

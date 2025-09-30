@@ -23,6 +23,7 @@ from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.jobstores.memory import MemoryJobStore
 
 from .analytics_processor import AnalyticsProcessor
+from open_webui.cogniforce_models.analytics_tables import ProcessingLog
 
 log = logging.getLogger(__name__)
 
@@ -145,7 +146,7 @@ class AnalyticsScheduler:
 
         try:
             log.info(f"Manual processing triggered for date: {target_date}")
-            result = await self.processor.process_conversations_for_date(target_date)
+            result = await self.processor.process_chats_for_date(target_date)
             log.info(f"Manual processing completed for date: {target_date}")
             return result
 
@@ -165,11 +166,11 @@ class AnalyticsScheduler:
 
             log.info(f"Starting scheduled analytics processing for {yesterday}")
 
-            result = await self.processor.process_conversations_for_date(yesterday)
+            result = await self.processor.process_chats_for_date(yesterday)
 
-            processed = result.get('conversations_processed', 0)
-            failed = result.get('conversations_failed', 0)
-            cost = result.get('total_cost_usd', 0.0)
+            processed = result.chats_processed
+            failed = result.chats_failed
+            cost = result.total_cost_usd
 
             log.info(f"Scheduled processing completed for {yesterday}. "
                     f"Processed: {processed}, Failed: {failed}, Cost: ${cost:.4f}")
@@ -189,28 +190,17 @@ class AnalyticsScheduler:
 
             # Check recent processing runs
             from open_webui.internal.cogniforce_db import get_cogniforce_db
-            from sqlalchemy import text
 
             with get_cogniforce_db() as db:
-                # Get last processing run
-                result = db.execute(text("""
-                    SELECT
-                        run_date,
-                        status,
-                        conversations_processed,
-                        conversations_failed,
-                        completed_at
-                    FROM processing_log
-                    ORDER BY started_at DESC
-                    LIMIT 1
-                """))
+                # Get last processing run using SQLAlchemy ORM
+                last_processing_log = db.query(ProcessingLog).order_by(
+                    ProcessingLog.started_at.desc()
+                ).first()
 
-                last_run = result.fetchone()
-
-                if last_run:
-                    status = last_run[1]
-                    processed = last_run[2] or 0
-                    failed = last_run[3] or 0
+                if last_processing_log:
+                    status = last_processing_log.status
+                    processed = last_processing_log.chats_processed or 0
+                    failed = last_processing_log.chats_failed or 0
 
                     if status == 'completed' and failed == 0:
                         health_status = "healthy"
@@ -296,10 +286,10 @@ class AnalyticsScheduler:
         """
         try:
             log.info(f"Starting one-time processing for {target_date}")
-            result = await self.processor.process_conversations_for_date(target_date)
+            result = await self.processor.process_chats_for_date(target_date)
 
-            processed = result.get('conversations_processed', 0)
-            failed = result.get('conversations_failed', 0)
+            processed = result.chats_processed
+            failed = result.chats_failed
 
             log.info(f"One-time processing completed for {target_date}. "
                     f"Processed: {processed}, Failed: {failed}")

@@ -199,17 +199,36 @@ All planned components are complete.
 - **Analytics-specific instrumentation** - Custom metrics for analytics performance
 - **Integration ready** - Works with existing OpenWebUI OpenTelemetry infrastructure
 
-### ⏳ NOT STARTED - Advanced Backend Features
+### ✅ COMPLETED - Advanced Backend Features
 
-#### 1. **Analytics Processing Engine**
-- **Status**: ⏳ **NOT STARTED**
-- **Scope**: Real conversation data processing and LLM integration
-- **Dependencies**: OpenAI API integration, conversation analysis logic
+#### 9. **Analytics Processing Engine**
+- **Status**: ✅ **COMPLETE**
+- **Implementation**: Full LLM-powered conversation analysis with GPT-5-mini
+- **Files**:
+  - `backend/open_webui/services/analytics_processor.py` - Core processing engine
+  - `backend/open_webui/services/analytics_scheduler.py` - Scheduled processing
+  - `backend/open_webui/routers/analytics.py` - Manual processing endpoint
+  - `backend/open_webui/config.py` - Analytics configuration
 
-#### 2. **Scheduled Processing**
-- **Status**: ⏳ **NOT STARTED**
-- **Scope**: Automated daily analytics processing
-- **Dependencies**: APScheduler, background tasks, real data processing
+**Features Implemented**:
+- GPT-5-mini integration for time estimation (max_tokens: 4096)
+- PERT-based time estimation (low/likely/high ranges)
+- Conversation summarization with privacy protection
+- Active vs idle time calculation (10-minute threshold)
+- Batch processing with error handling and retry logic
+- Processing log tracking for audit trail
+- Cache invalidation for immediate dashboard updates
+
+#### 10. **Scheduled Processing**
+- **Status**: ✅ **COMPLETE**
+- **Implementation**: APScheduler-based daily analytics processing
+- **Features**:
+  - Daily processing at midnight (configurable)
+  - Health check every hour
+  - Manual trigger endpoint for on-demand processing
+  - Graceful shutdown handling
+  - Processing deduplication
+  - Comprehensive error logging
 
 ## Environment Configuration
 
@@ -220,12 +239,17 @@ DATABASE_URL=postgresql://owui:owui@localhost:5432/openwebui
 COGNIFORCE_DATABASE_URL=postgresql://owui:owui@localhost:5432/cogniforce  # Auto-derived
 ```
 
-### Required for Backend Analytics Features (Future)
+### Required for Backend Analytics Features (Active)
 ```bash
-# Analytics processing (when implementing backend)
-OPENAI_API_KEY=sk-your-openai-key-here
-ANALYTICS_SALT=unique_salt_for_hashing
+# Analytics processing configuration
+OPENAI_API_KEY=sk-proj-your-key-here  # Required for GPT-5-mini
+ANALYTICS_MODEL=gpt-5-mini  # LLM model for time estimation
+ENABLE_ANALYTICS_PROCESSING=true  # Enable processing engine
 ANALYTICS_IDLE_THRESHOLD=10  # minutes
+
+# CORS and Model Access (for development)
+CORS_ALLOW_ORIGIN='http://localhost:5173;http://localhost:8080'
+BYPASS_MODEL_ACCESS_CONTROL=true  # Allow normal users to see OpenAI models
 
 # Note: ANALYTICS_PASSWORD removed - now using existing OpenWebUI admin authentication
 ```

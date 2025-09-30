@@ -21,7 +21,7 @@ from open_webui.cogniforce_models.analytics_tables import (
     AnalyticsSummary,
     DailyTrendItem,
     UserBreakdownItem,
-    ConversationItem,
+    ChatItem,
     HealthStatus
 )
 
@@ -59,9 +59,9 @@ class TestAnalyticsRouter(unittest.TestCase):
 
         # Mock analytics data
         mock_summary = AnalyticsSummary(
-            total_conversations=100,
+            total_chats=100,
             total_time_saved=3000,
-            avg_time_saved_per_conversation=30.0,
+            avg_time_saved_per_chat=30.0,
             confidence_level=85.0
         )
         mock_get_summary.return_value = mock_summary
@@ -73,9 +73,9 @@ class TestAnalyticsRouter(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["totalConversations"], 100)
+        self.assertEqual(data["totalChats"], 100)
         self.assertEqual(data["totalTimeSaved"], 3000)
-        self.assertEqual(data["avgTimeSavedPerConversation"], 30.0)
+        self.assertEqual(data["avgTimeSavedPerChat"], 30.0)
         self.assertEqual(data["confidenceLevel"], 85.0)
 
     @patch('open_webui.routers.analytics.get_admin_user')
@@ -110,13 +110,13 @@ class TestAnalyticsRouter(unittest.TestCase):
         mock_trend_data = [
             DailyTrendItem(
                 date="2025-01-20",
-                conversations=15,
+                chats=15,
                 time_saved=450,
                 avg_confidence=80.0
             ),
             DailyTrendItem(
                 date="2025-01-19",
-                conversations=12,
+                chats=12,
                 time_saved=360,
                 avg_confidence=82.0
             )
@@ -132,7 +132,7 @@ class TestAnalyticsRouter(unittest.TestCase):
         data = response.json()
         self.assertIn("data", data)
         self.assertEqual(len(data["data"]), 2)
-        self.assertEqual(data["data"][0]["conversations"], 15)
+        self.assertEqual(data["data"][0]["chats"], 15)
 
     @patch('open_webui.routers.analytics.get_admin_user')
     @patch('open_webui.routers.analytics.Analytics.get_daily_trend_data')
@@ -165,16 +165,14 @@ class TestAnalyticsRouter(unittest.TestCase):
         # Mock user breakdown data
         mock_breakdown_data = [
             UserBreakdownItem(
-                user_id_hash="hash1",
                 user_name="User One (user1@example.com)",
-                conversations=25,
+                chats=25,
                 time_saved=750,
                 avg_confidence=85.0
             ),
             UserBreakdownItem(
-                user_id_hash="hash2",
                 user_name="User Two (user2@example.com)",
-                conversations=15,
+                chats=15,
                 time_saved=450,
                 avg_confidence=80.0
             )
@@ -190,7 +188,7 @@ class TestAnalyticsRouter(unittest.TestCase):
         data = response.json()
         self.assertIn("users", data)
         self.assertEqual(len(data["users"]), 2)
-        self.assertEqual(data["users"][0]["conversations"], 25)
+        self.assertEqual(data["users"][0]["chats"], 25)
 
     @patch('open_webui.routers.analytics.get_admin_user')
     @patch('open_webui.routers.analytics.Analytics.get_health_status_data')
@@ -224,42 +222,50 @@ class TestAnalyticsRouter(unittest.TestCase):
         self.assertIn("systemInfo", data)
 
     @patch('open_webui.routers.analytics.get_admin_user')
-    @patch('open_webui.routers.analytics.Analytics.get_conversations_data')
-    def test_get_analytics_conversations_success(self, mock_get_conversations, mock_get_admin_user):
-        """Test successful conversations retrieval."""
+    @patch('open_webui.routers.analytics.Analytics.get_chats_data')
+    def test_get_analytics_chats_success(self, mock_get_chats, mock_get_admin_user):
+        """Test successful chats retrieval."""
         mock_get_admin_user.return_value = self.admin_user
 
-        # Mock conversations data
-        mock_conversations_data = [
-            ConversationItem(
+        # Mock chats data
+        mock_chats_data = [
+            ChatItem(
                 id="conv1",
                 user_name="User One (user1@example.com)",
                 created_at="2025-01-20T10:00:00",
                 time_saved=45,
                 confidence=85,
+                topic="Test Chat Topic",
+                message_count=10,
+                user_message_count=5,
+                assistant_message_count=5,
                 summary="Test conversation summary"
             ),
-            ConversationItem(
+            ChatItem(
                 id="conv2",
                 user_name="User Two (user2@example.com)",
                 created_at="2025-01-20T09:30:00",
                 time_saved=30,
                 confidence=80,
+                topic="Another Chat Topic",
+                message_count=8,
+                user_message_count=4,
+                assistant_message_count=4,
                 summary="Another conversation"
             )
         ]
-        mock_get_conversations.return_value = mock_conversations_data
+        mock_get_chats.return_value = mock_chats_data
 
         response = self.client.get(
-            "/api/v1/analytics/conversations?limit=20&offset=0",
+            "/api/v1/analytics/chats?limit=20&offset=0",
             headers=self._get_auth_headers()
         )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertIn("conversations", data)
-        self.assertEqual(len(data["conversations"]), 2)
-        self.assertEqual(data["conversations"][0]["id"], "conv1")
+        self.assertIn("chats", data)
+        self.assertEqual(len(data["chats"]), 2)
+        self.assertEqual(data["chats"][0]["id"], "conv1")
 
     @patch('open_webui.routers.analytics.get_admin_user')
     @patch('open_webui.routers.analytics.Analytics.get_summary_data')
@@ -269,9 +275,9 @@ class TestAnalyticsRouter(unittest.TestCase):
 
         # Mock summary data
         mock_summary = AnalyticsSummary(
-            total_conversations=50,
+            total_chats=50,
             total_time_saved=1500,
-            avg_time_saved_per_conversation=30.0,
+            avg_time_saved_per_chat=30.0,
             confidence_level=85.0
         )
         mock_get_summary.return_value = mock_summary
@@ -294,7 +300,7 @@ class TestAnalyticsRouter(unittest.TestCase):
         self.assertEqual(rows[0], ["Metric", "Value"])
         # Verify summary data is present
         metrics = {row[0]: row[1] for row in rows[1:]}
-        self.assertEqual(metrics["Total Conversations"], "50")
+        self.assertEqual(metrics["Total Chats"], "50")
 
     @patch('open_webui.routers.analytics.get_admin_user')
     def test_export_analytics_invalid_format(self, mock_get_admin_user):
@@ -386,9 +392,9 @@ class TestAnalyticsRouterPerformance(unittest.TestCase):
 
         mock_get_admin_user.return_value = self.admin_user
         mock_summary = AnalyticsSummary(
-            total_conversations=1000,
+            total_chats=1000,
             total_time_saved=30000,
-            avg_time_saved_per_conversation=30.0,
+            avg_time_saved_per_chat=30.0,
             confidence_level=85.0
         )
         mock_get_summary.return_value = mock_summary

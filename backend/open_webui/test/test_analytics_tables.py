@@ -20,7 +20,7 @@ from open_webui.cogniforce_models.analytics_tables import (
     AnalyticsSummary,
     DailyTrendItem,
     UserBreakdownItem,
-    ConversationItem,
+    ChatItem,
     HealthStatus
 )
 
@@ -49,58 +49,48 @@ class TestAnalyticsTable(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.analytics_table = AnalyticsTable()
-        self.test_user_hash = "a1b2c3d4e5f6789"
+        self.test_user_id = "550e8400-e29b-41d4-a716-446655440000"
         self.test_user_email = "test@example.com"
         self.test_user_name = "Test User"
 
     @patch('open_webui.cogniforce_models.analytics_tables.get_db')
-    def test_get_user_name_from_hash_success(self, mock_get_db):
-        """Test successful user name resolution from hash."""
+    def test_get_user_name_from_id_success(self, mock_get_db):
+        """Test successful user name resolution from UUID."""
         # Mock database session and result
         mock_db = Mock()
         mock_get_db.return_value.__enter__.return_value = mock_db
 
         # Mock the user query result
-        mock_result = MockDBResult([
-            ('user1', 'test@example.com', 'Test User'),
-            ('user2', 'other@example.com', 'Other User')
-        ])
-        mock_db.execute.return_value = mock_result
+        mock_user = (self.test_user_id, self.test_user_email, self.test_user_name)
+        mock_db.query.return_value.filter.return_value.first.return_value = mock_user
 
-        # Mock hashlib to return our expected hash for the test email
-        with patch('hashlib.sha256') as mock_sha:
-            mock_hash = Mock()
-            mock_hash.hexdigest.return_value = self.test_user_hash
-            mock_sha.return_value = mock_hash
-
-            result = self.analytics_table._get_user_name_from_hash(self.test_user_hash)
+        result = self.analytics_table._get_user_name_from_id(self.test_user_id)
 
         expected = f"{self.test_user_name} ({self.test_user_email})"
         self.assertEqual(result, expected)
 
     @patch('open_webui.cogniforce_models.analytics_tables.get_db')
-    def test_get_user_name_from_hash_not_found(self, mock_get_db):
-        """Test fallback behavior when user hash is not found."""
+    def test_get_user_name_from_id_not_found(self, mock_get_db):
+        """Test fallback behavior when user ID is not found."""
         mock_db = Mock()
         mock_get_db.return_value.__enter__.return_value = mock_db
 
         # Mock empty result
-        mock_result = MockDBResult([])
-        mock_db.execute.return_value = mock_result
+        mock_db.query.return_value.filter.return_value.first.return_value = None
 
-        result = self.analytics_table._get_user_name_from_hash(self.test_user_hash)
+        result = self.analytics_table._get_user_name_from_id(self.test_user_id)
 
-        expected = f"User {self.test_user_hash[:8]}"
+        expected = f"Unknown User {self.test_user_id[:8]}"
         self.assertEqual(result, expected)
 
     @patch('open_webui.cogniforce_models.analytics_tables.get_db')
-    def test_get_user_name_from_hash_database_error(self, mock_get_db):
+    def test_get_user_name_from_id_database_error(self, mock_get_db):
         """Test fallback behavior when database error occurs."""
         mock_get_db.side_effect = Exception("Database connection failed")
 
-        result = self.analytics_table._get_user_name_from_hash(self.test_user_hash)
+        result = self.analytics_table._get_user_name_from_id(self.test_user_id)
 
-        expected = f"User {self.test_user_hash[:8]}"
+        expected = f"Unknown User {self.test_user_id[:8]}"
         self.assertEqual(result, expected)
 
     @patch('open_webui.cogniforce_models.analytics_tables.get_cogniforce_db')
@@ -118,9 +108,9 @@ class TestAnalyticsTable(unittest.TestCase):
         result = self.analytics_table.get_summary_data()
 
         self.assertIsInstance(result, AnalyticsSummary)
-        self.assertEqual(result.total_conversations, 50)
+        self.assertEqual(result.total_chats, 50)
         self.assertEqual(result.total_time_saved, 1500)
-        self.assertEqual(result.avg_time_saved_per_conversation, 30.0)
+        self.assertEqual(result.avg_time_saved_per_chat, 30.0)
         self.assertEqual(result.confidence_level, 85.5)
 
     @patch('open_webui.cogniforce_models.analytics_tables.get_cogniforce_db')
@@ -136,9 +126,9 @@ class TestAnalyticsTable(unittest.TestCase):
         result = self.analytics_table.get_summary_data()
 
         self.assertIsInstance(result, AnalyticsSummary)
-        self.assertEqual(result.total_conversations, 0)
+        self.assertEqual(result.total_chats, 0)
         self.assertEqual(result.total_time_saved, 0)
-        self.assertEqual(result.avg_time_saved_per_conversation, 0.0)
+        self.assertEqual(result.avg_time_saved_per_chat, 0.0)
         self.assertEqual(result.confidence_level, 0.0)
 
     @patch('open_webui.cogniforce_models.analytics_tables.get_cogniforce_db')
@@ -155,12 +145,12 @@ class TestAnalyticsTable(unittest.TestCase):
         ])
         mock_db.execute.return_value = mock_result
 
-        result = self.analytics_table.get_daily_trend_data(7)
+        result = self.analytics_table.get_trends_data()
 
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 2)
         self.assertIsInstance(result[0], DailyTrendItem)
-        self.assertEqual(result[0].conversations, 10)
+        self.assertEqual(result[0].chats, 10)
         self.assertEqual(result[0].time_saved, 300)
 
     @patch('open_webui.cogniforce_models.analytics_tables.get_cogniforce_db')
@@ -171,13 +161,13 @@ class TestAnalyticsTable(unittest.TestCase):
 
         # Mock user breakdown query result
         mock_result = MockDBResult([
-            (self.test_user_hash, 25, 750, 85.0),
-            ('another_hash', 15, 450, 80.0)
+            (self.test_user_id, 25, 750, 85.0),
+            ('550e8400-e29b-41d4-a716-446655440001', 15, 450, 80.0)
         ])
         mock_db.execute.return_value = mock_result
 
         # Mock the user name lookup
-        with patch.object(self.analytics_table, '_get_user_name_from_hash') as mock_get_name:
+        with patch.object(self.analytics_table, '_get_user_name_from_id') as mock_get_name:
             mock_get_name.side_effect = [
                 f"{self.test_user_name} ({self.test_user_email})",
                 "Another User (another@example.com)"
@@ -188,36 +178,36 @@ class TestAnalyticsTable(unittest.TestCase):
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 2)
         self.assertIsInstance(result[0], UserBreakdownItem)
-        self.assertEqual(result[0].user_id_hash, self.test_user_hash)
-        self.assertEqual(result[0].conversations, 25)
+        self.assertIn(self.test_user_name, result[0].user_name)
+        self.assertEqual(result[0].chats, 25)
         self.assertEqual(result[0].time_saved, 750)
 
     @patch('open_webui.cogniforce_models.analytics_tables.get_cogniforce_db')
-    def test_get_conversations_data_success(self, mock_get_cogniforce_db):
-        """Test successful conversations data retrieval."""
+    def test_get_chats_data_success(self, mock_get_cogniforce_db):
+        """Test successful chats data retrieval."""
         mock_db = Mock()
         mock_get_cogniforce_db.return_value.__enter__.return_value = mock_db
 
-        # Mock conversations query result
+        # Mock chats query result
         test_datetime = datetime.now()
         mock_result = MockDBResult([
-            ('conv1', self.test_user_hash, test_datetime, 45, 85, 'Test conversation summary'),
-            ('conv2', 'another_hash', test_datetime, 30, 80, 'Another conversation')
+            ('conv1', self.test_user_id, test_datetime, 45, 85, 'Test conversation summary'),
+            ('conv2', '550e8400-e29b-41d4-a716-446655440001', test_datetime, 30, 80, 'Another conversation')
         ])
         mock_db.execute.return_value = mock_result
 
         # Mock the user name lookup
-        with patch.object(self.analytics_table, '_get_user_name_from_hash') as mock_get_name:
+        with patch.object(self.analytics_table, '_get_user_name_from_id') as mock_get_name:
             mock_get_name.side_effect = [
                 f"{self.test_user_name} ({self.test_user_email})",
                 "Another User (another@example.com)"
             ]
 
-            result = self.analytics_table.get_conversations_data(20, 0)
+            result = self.analytics_table.get_chats_data(20, 0)
 
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 2)
-        self.assertIsInstance(result[0], ConversationItem)
+        self.assertIsInstance(result[0], ChatItem)
         self.assertEqual(result[0].id, 'conv1')
         self.assertEqual(result[0].time_saved, 45)
         self.assertEqual(result[0].confidence, 85)
@@ -283,12 +273,12 @@ class TestAnalyticsTableIntegration(unittest.TestCase):
         """Test cross-database user lookup functionality."""
         # This test requires both databases to be available
         try:
-            # Get a user hash from analytics and verify name lookup
+            # Get a user ID from analytics and verify name lookup
             user_breakdown = self.analytics_table.get_user_breakdown_data(1)
             if user_breakdown:
-                user_hash = user_breakdown[0].user_id_hash
-                user_name = self.analytics_table._get_user_name_from_hash(user_hash)
-                self.assertNotEqual(user_name, f"User {user_hash[:8]}")
+                user_id = user_breakdown[0].user_id
+                user_name = self.analytics_table._get_user_name_from_id(user_id)
+                self.assertNotEqual(user_name, f"Unknown User {user_id[:8]}")
                 self.assertIn('@', user_name)  # Should contain email
         except Exception as e:
             self.skipTest(f"Cross-database test not available: {e}")

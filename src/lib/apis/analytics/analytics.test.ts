@@ -14,7 +14,7 @@ import {
 	getAnalyticsDailyTrend,
 	getAnalyticsUserBreakdown,
 	getAnalyticsHealth,
-	getAnalyticsConversations,
+	getAnalyticsChats,
 	exportAnalyticsData
 } from './index';
 
@@ -37,9 +37,9 @@ describe('Analytics API Service', () => {
 	describe('getAnalyticsSummary', () => {
 		it('should successfully fetch analytics summary', async () => {
 			const mockSummaryData = {
-				totalConversations: 100,
+				totalChats: 100,
 				totalTimeSaved: 3000,
-				avgTimeSavedPerConversation: 30.0,
+				avgTimeSavedPerChat: 30.0,
 				confidenceLevel: 85.0
 			};
 
@@ -103,13 +103,13 @@ describe('Analytics API Service', () => {
 				data: [
 					{
 						date: '2025-01-20',
-						conversations: 15,
+						chats: 15,
 						timeSaved: 450,
 						avgConfidence: 80.0
 					},
 					{
 						date: '2025-01-19',
-						conversations: 12,
+						chats: 12,
 						timeSaved: 360,
 						avgConfidence: 82.0
 					}
@@ -157,9 +157,8 @@ describe('Analytics API Service', () => {
 			const mockUserData = {
 				users: [
 					{
-						userIdHash: 'hash1',
 						userName: 'User One (user1@example.com)',
-						conversations: 25,
+						chats: 25,
 						timeSaved: 750,
 						avgConfidence: 85.0
 					}
@@ -237,30 +236,30 @@ describe('Analytics API Service', () => {
 		});
 	});
 
-	describe('getAnalyticsConversations', () => {
-		it('should successfully fetch conversations data', async () => {
-			const mockConversationData = {
-				conversations: [
+	describe('getAnalyticsChats', () => {
+		it('should successfully fetch chats data', async () => {
+			const mockChatData = {
+				chats: [
 					{
 						id: 'conv1',
 						userName: 'User One (user1@example.com)',
 						createdAt: '2025-01-20T10:00:00',
 						timeSaved: 45,
 						confidence: 85,
-						summary: 'Test conversation summary'
+						summary: 'Test chat summary'
 					}
 				]
 			};
 
 			mockFetch.mockResolvedValueOnce({
 				ok: true,
-				json: async () => mockConversationData
+				json: async () => mockChatData
 			});
 
-			const result = await getAnalyticsConversations(mockToken, 20, 0);
+			const result = await getAnalyticsChats(mockToken, 20, 0);
 
 			expect(mockFetch).toHaveBeenCalledWith(
-				'http://localhost:8080/api/v1/analytics/conversations?limit=20&offset=0',
+				'http://localhost:8080/api/v1/analytics/chats?limit=20&offset=0',
 				{
 					method: 'GET',
 					headers: {
@@ -270,19 +269,19 @@ describe('Analytics API Service', () => {
 				}
 			);
 
-			expect(result).toEqual(mockConversationData);
+			expect(result).toEqual(mockChatData);
 		});
 
 		it('should use default parameters', async () => {
 			mockFetch.mockResolvedValueOnce({
 				ok: true,
-				json: async () => ({ conversations: [] })
+				json: async () => ({ chats: [] })
 			});
 
-			await getAnalyticsConversations(mockToken);
+			await getAnalyticsChats(mockToken);
 
 			expect(mockFetch).toHaveBeenCalledWith(
-				'http://localhost:8080/api/v1/analytics/conversations?limit=20&offset=0',
+				'http://localhost:8080/api/v1/analytics/chats?limit=20&offset=0',
 				expect.any(Object)
 			);
 		});
@@ -290,7 +289,7 @@ describe('Analytics API Service', () => {
 
 	describe('exportAnalyticsData', () => {
 		it('should successfully export CSV data', async () => {
-			const mockCsvData = 'Metric,Value\nTotal Conversations,50\n';
+			const mockCsvData = 'Metric,Value\nTotal Chats,50\n';
 			const mockBlob = new Blob([mockCsvData], { type: 'text/csv' });
 
 			mockFetch.mockResolvedValueOnce({
@@ -440,7 +439,7 @@ describe('Analytics API Service', () => {
 			mockFetch
 				.mockResolvedValueOnce({
 					ok: true,
-					json: async () => ({ totalConversations: 100 })
+					json: async () => ({ totalChats: 100 })
 				})
 				.mockResolvedValueOnce({
 					ok: true,

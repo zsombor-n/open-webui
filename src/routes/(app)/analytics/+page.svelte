@@ -5,15 +5,17 @@
 	import LockClosed from '$lib/components/icons/LockClosed.svelte';
 	import { toast } from 'svelte-sonner';
 	import { user } from '$lib/stores';
+	import AnalyticsNavbar from '$lib/components/analytics/Navbar.svelte';
 	import {
 		getAnalyticsSummary,
-		getAnalyticsDailyTrend,
+		getAnalyticsTrends,
 		getAnalyticsUserBreakdown,
 		getAnalyticsHealth,
-		getAnalyticsConversations,
+		getAnalyticsChats,
 		exportAnalyticsData,
 		triggerAnalyticsProcessing
 	} from '$lib/apis/analytics';
+	import { type DateRangeValue, calculateLast7Days } from '$lib/utils/dateRanges';
 
 	const i18n = getContext('i18n');
 
@@ -23,7 +25,7 @@
 		dailyTrend: [],
 		userBreakdown: [],
 		health: null,
-		recentConversations: [],
+		recentChats: [],
 		loading: true,
 		error: null
 	};
@@ -31,6 +33,9 @@
 	// Manual processing state
 	let isProcessing = false;
 	let processingMessage = '';
+
+	// Date range state
+	let selectedDateRange: DateRangeValue = 'this_week';
 
 	// Check user authentication and admin role
 	$: isAuthenticated = $user?.token;
@@ -48,13 +53,15 @@
 			analyticsData.loading = true;
 			analyticsData.error = null;
 
-			// Load all analytics data
-			const [summary, dailyTrend, userBreakdown, health, conversations] = await Promise.allSettled([
-				getAnalyticsSummary($user.token),
-				getAnalyticsDailyTrend($user.token, 7),
-				getAnalyticsUserBreakdown($user.token, 10),
+			// Load all analytics data using range type (backend calculates dates with Pendulum)
+			// Note: Daily trend always shows last 7 days regardless of selected range
+			const last7Days = calculateLast7Days();
+			const [summary, dailyTrend, userBreakdown, health, chats] = await Promise.allSettled([
+				getAnalyticsSummary($user.token, undefined, undefined, selectedDateRange),
+				getAnalyticsTrends($user.token, last7Days.startDate, last7Days.endDate),
+				getAnalyticsUserBreakdown($user.token, 10, undefined, undefined, selectedDateRange),
 				getAnalyticsHealth($user.token),
-				getAnalyticsConversations($user.token, 10)
+				getAnalyticsChats($user.token, 10, 0, false, undefined, undefined, selectedDateRange)
 			]);
 
 			// Handle successful responses
@@ -62,20 +69,20 @@
 				analyticsData.summary = summary.value;
 			}
 			if (dailyTrend.status === 'fulfilled' && dailyTrend.value) {
-				analyticsData.dailyTrend = dailyTrend.value.data || [];
+				analyticsData.dailyTrend = dailyTrend.value || [];
 			}
 			if (userBreakdown.status === 'fulfilled' && userBreakdown.value) {
-				analyticsData.userBreakdown = userBreakdown.value.users || [];
+				analyticsData.userBreakdown = userBreakdown.value || [];
 			}
 			if (health.status === 'fulfilled' && health.value) {
 				analyticsData.health = health.value;
 			}
-			if (conversations.status === 'fulfilled' && conversations.value) {
-				analyticsData.recentConversations = conversations.value.conversations || [];
+			if (chats.status === 'fulfilled' && chats.value) {
+				analyticsData.recentChats = chats.value || [];
 			}
 
 			// Check if any requests failed with 404 (API not implemented)
-			const hasNotFound = [summary, dailyTrend, userBreakdown, health, conversations].some(
+			const hasNotFound = [summary, dailyTrend, userBreakdown, health, chats].some(
 				result => result.status === 'rejected' && result.reason?.status === 404
 			);
 
@@ -99,7 +106,7 @@
 		}
 
 		try {
-			const blob = await exportAnalyticsData($user.token, 'csv', type);
+			const blob = await exportAnalyticsData($user.token, 'csv', type, undefined, undefined, selectedDateRange);
 			if (blob) {
 				const url = window.URL.createObjectURL(blob);
 				const link = document.createElement('a');
@@ -142,22 +149,95 @@
 		}
 	};
 
+	const handleDateRangeChange = (event: CustomEvent) => {
+		selectedDateRange = event.detail.value;
+		// Reload data with new date range
+		loadAnalytics();
+	};
+
 	const formatMinutes = (minutes: number): string => {
 		const hours = Math.floor(minutes / 60);
 		const mins = minutes % 60;
 		return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
 	};
 
-	// Reactive statement to load analytics when user gains access
-	$: if (hasAccess && analyticsData.loading === true) {
-		loadAnalytics();
-	} else if (!hasAccess) {
-		analyticsData.loading = false;
-	}
+	const formatMinutesWithTotal = (minutes: number): string => {
+		const hours = Math.floor(minutes / 60);
+		const mins = minutes % 60;
+		const hoursMinutes = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+		return `${hoursMinutes} (${minutes.toLocaleString()} minutes)`;
+	};
+
+	// Ensure we always have exactly 7 consecutive days of data in ascending order
+	const ensureSevenDays = (dailyData) => {
+		// Generate the last 7 completed days (excluding today) going backwards
+		const result = [];
+		const today = new Date();
+
+		for (let i = 7; i >= 1; i--) {
+			const date = new Date(today);
+			date.setDate(today.getDate() - i);
+			const dateString = date.toISOString().split('T')[0];
+
+			// Look for existing data for this date
+			const existingData = dailyData ? dailyData.find(d => d.date === dateString) : null;
+
+			result.push({
+				date: dateString,
+				timeSaved: existingData ? existingData.timeSaved : 0,
+				chats: existingData ? existingData.chats : 0,
+				avgConfidence: existingData ? existingData.avgConfidence : 0
+			});
+		}
+
+		return result;
+	};
+
+	// Reactive data for chart
+	$: sortedDailyTrend = analyticsData.dailyTrend ?
+		ensureSevenDays(analyticsData.dailyTrend) : [];
+	$: maxTimeSaved = Math.max(...sortedDailyTrend.map(d => d.timeSaved), 1); // Minimum 1 to avoid division by zero
+
+	// Calculate bar height with better visual differentiation
+	const calculateBarHeight = (timeSaved, maxTime) => {
+		if (timeSaved === 0) return 24; // Special low height for zero values
+
+		// Use logarithmic scaling for better visual differentiation
+		const minHeight = 40;
+		const maxHeight = 200;
+
+		// Simple proportional scaling with minimum height for non-zero values
+		const proportion = timeSaved / maxTime;
+		const height = minHeight + (proportion * (maxHeight - minHeight));
+
+		return Math.round(height);
+	};
+
+	const formatDateTime = (isoString: string | null | undefined): string => {
+		if (!isoString) return 'Never';
+		try {
+			const date = new Date(isoString);
+			// Format as "Sep 25, 2025 at 3:17 PM"
+			return date.toLocaleDateString('en-US', {
+				month: 'short',
+				day: 'numeric',
+				year: 'numeric'
+			}) + ' at ' + date.toLocaleTimeString('en-US', {
+				hour: 'numeric',
+				minute: '2-digit',
+				hour12: true
+			});
+		} catch (error) {
+			return 'Invalid date';
+		}
+	};
+
 
 	onMount(() => {
-		// Initial load check
-		if (!hasAccess) {
+		// Initial load
+		if (hasAccess) {
+			loadAnalytics();
+		} else {
 			analyticsData.loading = false;
 		}
 	});
@@ -167,9 +247,22 @@
 	<title>Analytics Dashboard - AI Time Savings</title>
 </svelte:head>
 
-<!-- Access Control Messages -->
-{#if !isAuthenticated}
-	<div class="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+<!-- Main Layout Container -->
+<div class="h-screen max-h-[100dvh] w-full flex flex-col">
+	<!-- Analytics Navbar -->
+	{#if hasAccess}
+		<AnalyticsNavbar
+			{triggerProcessing}
+			{exportData}
+			{isProcessing}
+			bind:selectedDateRange
+			on:dateRangeChange={handleDateRangeChange}
+		/>
+	{/if}
+
+	<!-- Access Control Messages -->
+	{#if !isAuthenticated}
+		<div class="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
 		<div class="text-center max-w-md mx-4">
 			<div class="flex justify-center mb-4">
 				<LockClosed className="w-16 h-16 text-gray-400" />
@@ -208,58 +301,6 @@
 {:else}
 	<div class="flex-1 overflow-auto bg-gray-50 dark:bg-gray-900">
 		<div class="container mx-auto px-4 py-6 max-w-7xl">
-			<!-- Header -->
-			<div class="mb-8">
-				<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-					<div class="flex items-center">
-						<ChartBar className="w-8 h-8 mr-3 text-blue-600 flex-shrink-0" />
-						<div>
-							<h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">AI Time Savings Analytics</h1>
-							<p class="text-sm sm:text-base text-gray-600 dark:text-gray-300 mt-1">
-								Daily analysis of AI-assisted conversation efficiency
-							</p>
-						</div>
-					</div>
-					<div class="flex flex-wrap gap-2">
-						<button
-							on:click={triggerProcessing}
-							disabled={isProcessing}
-							class="flex items-center px-3 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors text-sm"
-						>
-							{#if isProcessing}
-								<svg class="animate-spin w-4 h-4 mr-2" viewBox="0 0 24 24">
-									<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
-									<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-								</svg>
-								Processing...
-							{:else}
-								🔄 Run Analytics Now
-							{/if}
-						</button>
-						<button
-							on:click={() => exportData('summary')}
-							class="flex items-center px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm"
-						>
-							<ArrowDownTray className="w-4 h-4 mr-2" />
-							Export Summary
-						</button>
-						<button
-							on:click={() => exportData('daily')}
-							class="flex items-center px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
-						>
-							<ArrowDownTray className="w-4 h-4 mr-2" />
-							Export Daily
-						</button>
-						<button
-							on:click={() => exportData('detailed')}
-							class="flex items-center px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors text-sm"
-						>
-							<ArrowDownTray className="w-4 h-4 mr-2" />
-							Export Detailed
-						</button>
-					</div>
-				</div>
-			</div>
 
 			<!-- Processing Message -->
 			{#if processingMessage}
@@ -287,9 +328,9 @@
 								<ChartBar className="w-6 h-6 text-blue-600" />
 							</div>
 							<div class="ml-4">
-								<p class="text-sm font-medium text-gray-600 dark:text-gray-300">Total Conversations</p>
+								<p class="text-sm font-medium text-gray-600 dark:text-gray-300">Total Chats</p>
 								<p class="text-2xl font-semibold text-gray-900 dark:text-white">
-									{analyticsData.summary?.totalConversations?.toLocaleString() || '0'}
+									{analyticsData.summary?.totalChats?.toLocaleString() || '0'}
 								</p>
 							</div>
 						</div>
@@ -319,9 +360,9 @@
 								</svg>
 							</div>
 							<div class="ml-4">
-								<p class="text-sm font-medium text-gray-600 dark:text-gray-300">Avg. per Conversation</p>
+								<p class="text-sm font-medium text-gray-600 dark:text-gray-300">Avg. per Chat</p>
 								<p class="text-2xl font-semibold text-gray-900 dark:text-white">
-									{analyticsData.summary?.avgTimeSavedPerConversation ? formatMinutes(analyticsData.summary.avgTimeSavedPerConversation) : '0m'}
+									{analyticsData.summary?.avgTimeSavedPerChat ? formatMinutes(analyticsData.summary.avgTimeSavedPerChat) : '0m'}
 								</p>
 							</div>
 						</div>
@@ -351,32 +392,36 @@
 					<!-- Daily Trend Chart -->
 					<div class="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 shadow-sm">
 						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Daily Time Savings Trend</h3>
-						{#if analyticsData.dailyTrend && analyticsData.dailyTrend.length > 0}
-							<div class="h-48 sm:h-64 flex items-end justify-between space-x-1 sm:space-x-2 overflow-x-auto">
-								{#each analyticsData.dailyTrend as day, index}
-									<div class="flex flex-col items-center flex-shrink-0">
-										<div
-											class="bg-blue-500 rounded-t transition-all duration-300 hover:bg-blue-600"
-											style="height: {(day.timeSaved / Math.max(...analyticsData.dailyTrend.map(d => d.timeSaved))) * 160}px; width: 24px; min-width: 24px;"
-											title="{day.date}: {day.timeSaved} minutes saved"
-										></div>
-										<div class="text-xs text-gray-600 dark:text-gray-300 mt-2 transform -rotate-45 origin-center">
-											{day.date.split('-')[2]}
-										</div>
+						<div class="h-48 sm:h-64 flex items-end gap-2 sm:gap-3">
+							{#each sortedDailyTrend as day, index}
+								<div class="flex flex-col items-center flex-1">
+									<div
+										class="{day.timeSaved > 0 ? 'bg-blue-500 hover:bg-blue-600' : 'bg-gray-300 dark:bg-gray-600'} rounded-t transition-all duration-300 w-full relative flex items-center justify-center"
+										style="height: {calculateBarHeight(day.timeSaved, maxTimeSaved)}px;"
+										title="{day.date}: {formatMinutes(day.timeSaved)} saved ({day.chats} chats)"
+									>
+										{#if day.timeSaved > 0}
+											<div class="text-white text-xs font-medium text-center leading-tight px-1">
+												{formatMinutes(day.timeSaved)}
+											</div>
+										{:else}
+											<div class="text-gray-500 dark:text-gray-400 text-xs font-medium">
+												0m
+											</div>
+										{/if}
 									</div>
-								{/each}
-							</div>
-							<div class="mt-4 text-sm text-gray-600 dark:text-gray-300">
-								Last 7 days • Total: {analyticsData.dailyTrend.reduce((sum, day) => sum + day.timeSaved, 0)} minutes saved
-							</div>
-						{:else}
-							<div class="h-48 sm:h-64 flex items-center justify-center text-gray-500 dark:text-gray-400">
-								<div class="text-center">
-									<p>No daily trend data available</p>
-									<p class="text-sm mt-1">Analytics API not yet implemented</p>
+									<div class="text-xs text-gray-600 dark:text-gray-300 mt-2 text-center">
+										{new Date(day.date).toLocaleDateString('en', { weekday: 'short' })}
+									</div>
+									<div class="text-xs text-gray-500 dark:text-gray-400">
+										{day.date.split('-')[2]}
+									</div>
 								</div>
-							</div>
-						{/if}
+							{/each}
+						</div>
+						<div class="mt-4 text-sm text-gray-600 dark:text-gray-300">
+							Last 7 days • Total: {formatMinutesWithTotal(sortedDailyTrend.reduce((sum, day) => sum + day.timeSaved, 0))}
+						</div>
 					</div>
 
 					<!-- User Breakdown -->
@@ -392,7 +437,7 @@
 											</div>
 											<div class="ml-3 min-w-0 flex-1">
 												<p class="text-sm font-medium text-gray-900 dark:text-white truncate">{user.userName}</p>
-												<p class="text-xs text-gray-600 dark:text-gray-300">{user.conversations} conversations</p>
+												<p class="text-xs text-gray-600 dark:text-gray-300">{user.chats} chats</p>
 											</div>
 										</div>
 										<div class="text-right ml-4 flex-shrink-0">
@@ -419,8 +464,9 @@
 				</div>
 
 				<!-- Enhanced Analytics Sections -->
-				<div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
-					<!-- Time Analysis Breakdown -->
+				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+					<!-- Time Analysis Breakdown - Currently not supported by backend API -->
+					<!--
 					<div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm">
 						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Time Analysis</h3>
 						{#if analyticsData.summary}
@@ -460,6 +506,7 @@
 							</div>
 						{/if}
 					</div>
+					-->
 
 					<!-- System Health Status -->
 					<div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm">
@@ -469,7 +516,7 @@
 								<div class="flex items-center justify-between">
 									<span class="text-sm text-gray-600 dark:text-gray-300">Status:</span>
 									<span class="px-2 py-1 rounded text-xs font-medium
-										{analyticsData.health.status === 'success' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+										{analyticsData.health.status === 'success' || analyticsData.health.status === 'healthy' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
 										 analyticsData.health.status === 'running' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' :
 										 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'}">
 										{analyticsData.health.status}
@@ -478,13 +525,15 @@
 								<div class="flex justify-between items-center">
 									<span class="text-sm text-gray-600 dark:text-gray-300">Last Run:</span>
 									<span class="font-medium text-gray-900 dark:text-white text-sm">
-										{analyticsData.health.lastRun}
+										{formatDateTime(analyticsData.health.lastProcessingRun)}
 									</span>
 								</div>
+								<!-- Processed count and processing time not available in current backend API -->
+								<!--
 								<div class="flex justify-between items-center">
 									<span class="text-sm text-gray-600 dark:text-gray-300">Processed:</span>
 									<span class="font-medium text-gray-900 dark:text-white">
-										{analyticsData.health.processedCount} conversations
+										{analyticsData.health.processedCount} chats
 									</span>
 								</div>
 								{#if analyticsData.health.processingTime}
@@ -495,6 +544,7 @@
 										</span>
 									</div>
 								{/if}
+								-->
 							</div>
 						{:else}
 							<div class="text-center py-6 text-gray-500 dark:text-gray-400">
@@ -504,27 +554,30 @@
 						{/if}
 					</div>
 
-					<!-- Recent Conversations -->
-					<div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm lg:col-span-2 xl:col-span-1">
-						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Recent Conversations</h3>
-						{#if analyticsData.recentConversations && analyticsData.recentConversations.length > 0}
+					<!-- Recent Chats -->
+					<div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm">
+						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Recent Chats</h3>
+						{#if analyticsData.recentChats && analyticsData.recentChats.length > 0}
 							<div class="space-y-3">
-								{#each analyticsData.recentConversations.slice(0, 5) as conversation}
+								{#each analyticsData.recentChats.slice(0, 5) as chat}
 									<div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
 										<div class="flex-1">
 											<p class="text-sm font-medium text-gray-900 dark:text-white">
-												{new Date(conversation.first_message_at).toLocaleDateString()}
+												{chat.topic || 'General Discussion'}
 											</p>
 											<p class="text-xs text-gray-600 dark:text-gray-300">
-												{formatMinutes(conversation.total_duration_minutes)} duration
+												{new Date(chat.createdAt).toLocaleDateString()}
+											</p>
+											<p class="text-xs text-gray-600 dark:text-gray-300">
+												{chat.userName}
 											</p>
 										</div>
 										<div class="text-right">
 											<p class="text-sm font-semibold text-green-600 dark:text-green-400">
-												{formatMinutes(conversation.time_saved_minutes)}
+												{formatMinutes(chat.timeSaved)}
 											</p>
 											<p class="text-xs text-gray-600 dark:text-gray-300">
-												{conversation.confidence_score}% confidence
+												{chat.confidence}% confidence
 											</p>
 										</div>
 									</div>
@@ -532,8 +585,8 @@
 							</div>
 						{:else}
 							<div class="text-center py-6 text-gray-500 dark:text-gray-400">
-								<p>No recent conversations</p>
-								<p class="text-sm mt-1">Conversations API not implemented</p>
+								<p>No recent chats</p>
+								<p class="text-sm mt-1">Chats API not implemented</p>
 							</div>
 						{/if}
 					</div>
@@ -548,34 +601,34 @@
 						<div>
 							<p class="text-gray-600 dark:text-gray-300">Timezone</p>
 							<p class="font-medium text-gray-900 dark:text-white">
-								{analyticsData.health?.timezone || 'Europe/Budapest'}
+								{analyticsData.health?.systemInfo?.timezone || 'UTC'}
 							</p>
 						</div>
 						<div>
 							<p class="text-gray-600 dark:text-gray-300">Last Analysis</p>
 							<p class="font-medium text-gray-900 dark:text-white">
-								{analyticsData.health?.lastRun || 'API not available'}
+								{formatDateTime(analyticsData.health?.lastProcessingRun)}
 							</p>
 						</div>
 						<div>
 							<p class="text-gray-600 dark:text-gray-300">Idle Threshold</p>
 							<p class="font-medium text-gray-900 dark:text-white">
-								{analyticsData.health?.idleThreshold || '10'} minutes
+								{analyticsData.health?.systemInfo?.idleThresholdMinutes || '10'} minutes
 							</p>
 						</div>
-						{#if analyticsData.health?.nextRun}
+						{#if analyticsData.health?.nextScheduledRun}
 							<div>
 								<p class="text-gray-600 dark:text-gray-300">Next Run</p>
 								<p class="font-medium text-gray-900 dark:text-white">
-									{analyticsData.health.nextRun}
+									{formatDateTime(analyticsData.health.nextScheduledRun)}
 								</p>
 							</div>
 						{/if}
-						{#if analyticsData.summary?.totalConversations}
+						{#if analyticsData.summary?.totalChats}
 							<div>
 								<p class="text-gray-600 dark:text-gray-300">Data Coverage</p>
 								<p class="font-medium text-gray-900 dark:text-white">
-									{analyticsData.summary.totalConversations} conversations
+									{analyticsData.summary.totalChats} chats
 								</p>
 							</div>
 						{/if}
@@ -589,4 +642,5 @@
 			</div>
 		</div>
 	</div>
-{/if}
+	{/if}
+</div>

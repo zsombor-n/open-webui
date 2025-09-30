@@ -1,7 +1,7 @@
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from functools import wraps
@@ -9,13 +9,15 @@ import io
 import csv
 
 from open_webui.utils.auth import get_admin_user
+from open_webui.utils.date_ranges import calculate_date_range
 from open_webui.cogniforce_models.analytics_tables import (
     Analytics,
     AnalyticsSummary,
     DailyTrendItem,
     UserBreakdownItem,
-    ConversationItem,
+    ChatItem,
     HealthStatus,
+    ProcessingTriggerResponse,
 )
 
 log = logging.getLogger(__name__)
@@ -114,14 +116,14 @@ router = APIRouter()
 from pydantic import BaseModel
 from typing import List
 
-class DailyTrendResponse(BaseModel):
+class TrendsResponse(BaseModel):
     data: List[DailyTrendItem]
 
 class UserBreakdownResponse(BaseModel):
     users: List[UserBreakdownItem]
 
-class ConversationsResponse(BaseModel):
-    conversations: List[ConversationItem]
+class ChatsResponse(BaseModel):
+    chats: List[ChatItem]
 
 
 
@@ -132,37 +134,129 @@ class ConversationsResponse(BaseModel):
 
 @router.get("/summary", response_model=AnalyticsSummary)
 @log_api_request("analytics_summary")
-async def get_analytics_summary(user=Depends(get_admin_user)):
-    """
-    Get analytics summary including total conversations, time saved,
-    average per conversation, and confidence level.
-    """
-    return Analytics.get_summary_data()
-
-
-@router.get("/daily-trend", response_model=DailyTrendResponse)
-@log_api_request("analytics_daily_trend")
-async def get_daily_trend(
-    days: int = Query(7, ge=1, le=90, description="Number of days to retrieve"),
+async def get_analytics_summary(
+    start_date: str = Query(None, description="Start date filter (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="End date filter (YYYY-MM-DD)"),
+    range_type: str = Query(None, description="Date range type: this_week, last_week, this_month, etc."),
     user=Depends(get_admin_user)
 ):
     """
-    Get daily analytics trend data for the specified number of days.
+    Get analytics summary including total chats, time saved,
+    average per chat, and confidence level.
+
+    Use either individual start_date/end_date OR range_type parameter.
+    If range_type is provided, it takes precedence over individual dates.
     """
-    trend_data = Analytics.get_daily_trend_data(days)
-    return DailyTrendResponse(data=trend_data)
+    # Parse date parameters if provided
+    start_date_obj = None
+    end_date_obj = None
+
+    if range_type:
+        # Use Pendulum-based date range calculation
+        try:
+            start_date_obj, end_date_obj = calculate_date_range(range_type)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid range_type: {str(e)}")
+    else:
+        # Parse individual dates as before
+        if start_date:
+            try:
+                start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+
+        if end_date:
+            try:
+                end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
+
+    return Analytics.get_summary_data(start_date_obj, end_date_obj)
+
+
+@router.get("/trends", response_model=TrendsResponse)
+@log_api_request("analytics_trends")
+async def get_trends(
+    start_date: str = Query(None, description="Start date filter (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="End date filter (YYYY-MM-DD)"),
+    range_type: str = Query(None, description="Date range type: this_week, last_week, this_month, etc."),
+    user=Depends(get_admin_user)
+):
+    """
+    Get analytics trend data for the specified date range.
+    If no dates provided, defaults to last 7 days.
+
+    Use either individual start_date/end_date OR range_type parameter.
+    If range_type is provided, it takes precedence over individual dates.
+    """
+    # Parse date parameters if provided
+    start_date_obj = None
+    end_date_obj = None
+
+    if range_type:
+        # Use Pendulum-based date range calculation
+        try:
+            start_date_obj, end_date_obj = calculate_date_range(range_type)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid range_type: {str(e)}")
+    else:
+        # Parse individual dates as before
+        if start_date:
+            try:
+                start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+
+        if end_date:
+            try:
+                end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
+
+    trend_data = Analytics.get_trends_data(start_date_obj, end_date_obj)
+    return TrendsResponse(data=trend_data)
 
 
 @router.get("/user-breakdown", response_model=UserBreakdownResponse)
 @log_api_request("analytics_user_breakdown")
 async def get_user_breakdown(
     limit: int = Query(10, ge=1, le=50, description="Maximum number of users to return"),
+    start_date: str = Query(None, description="Start date filter (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="End date filter (YYYY-MM-DD)"),
+    range_type: str = Query(None, description="Date range type: this_week, last_week, this_month, etc."),
     user=Depends(get_admin_user)
 ):
     """
-    Get top users by time saved with their conversation counts and average confidence.
+    Get top users by time saved with their chat counts and average confidence.
+
+    Use either individual start_date/end_date OR range_type parameter.
+    If range_type is provided, it takes precedence over individual dates.
     """
-    users = Analytics.get_user_breakdown_data(limit)
+    # Parse date parameters if provided
+    start_date_obj = None
+    end_date_obj = None
+
+    if range_type:
+        # Use Pendulum-based date range calculation
+        try:
+            start_date_obj, end_date_obj = calculate_date_range(range_type)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid range_type: {str(e)}")
+    else:
+        # Parse individual dates as before
+        if start_date:
+            try:
+                start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+
+        if end_date:
+            try:
+                end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
+
+    users = Analytics.get_user_breakdown_data(limit, start_date_obj, end_date_obj)
     return UserBreakdownResponse(users=users)
 
 
@@ -175,18 +269,51 @@ async def get_analytics_health(user=Depends(get_admin_user)):
     return Analytics.get_health_status_data()
 
 
-@router.get("/conversations", response_model=ConversationsResponse)
-@log_api_request("analytics_conversations")
-async def get_analytics_conversations(
-    limit: int = Query(20, ge=1, le=100, description="Maximum number of conversations to return"),
-    offset: int = Query(0, ge=0, description="Number of conversations to skip"),
+@router.get("/chats", response_model=ChatsResponse)
+@log_api_request("analytics_chats")
+async def get_analytics_chats(
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of chats to return"),
+    offset: int = Query(0, ge=0, description="Number of chats to skip"),
+    full_summary: bool = Query(False, description="Include full chat summary text"),
+    start_date: str = Query(None, description="Start date filter (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="End date filter (YYYY-MM-DD)"),
+    range_type: str = Query(None, description="Date range type: this_week, last_week, this_month, etc."),
     user=Depends(get_admin_user)
 ):
     """
-    Get recent conversations with analytics data.
+    Get recent chats with analytics data.
+    By default returns structured data (topic, message counts) without full summary.
+    Set full_summary=true to include the complete chat summary text.
+
+    Use either individual start_date/end_date OR range_type parameter.
+    If range_type is provided, it takes precedence over individual dates.
     """
-    conversations = Analytics.get_conversations_data(limit, offset)
-    return ConversationsResponse(conversations=conversations)
+    # Parse date parameters if provided
+    start_date_obj = None
+    end_date_obj = None
+
+    if range_type:
+        # Use Pendulum-based date range calculation
+        try:
+            start_date_obj, end_date_obj = calculate_date_range(range_type)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid range_type: {str(e)}")
+    else:
+        # Parse individual dates as before
+        if start_date:
+            try:
+                start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+
+        if end_date:
+            try:
+                end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
+
+    chats = Analytics.get_chats_data(limit, offset, full_summary, start_date_obj, end_date_obj)
+    return ChatsResponse(chats=chats)
 
 
 @router.get("/export/{format}")
@@ -194,37 +321,67 @@ async def get_analytics_conversations(
 async def export_analytics_data(
     format: str,
     type: str = Query("summary", description="Export type: summary, daily, detailed"),
+    start_date: str = Query(None, description="Start date filter (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="End date filter (YYYY-MM-DD)"),
+    range_type: str = Query(None, description="Date range type: this_week, last_week, this_month, etc."),
     user=Depends(get_admin_user)
 ):
     """
     Export analytics data in the specified format.
     Currently supports CSV format.
+
+    Use either individual start_date/end_date OR range_type parameter.
+    If range_type is provided, it takes precedence over individual dates.
     """
     if format.lower() != "csv":
         raise HTTPException(status_code=400, detail="Only CSV format is currently supported")
+
+    # Parse date parameters if provided
+    start_date_obj = None
+    end_date_obj = None
+
+    if range_type:
+        # Use Pendulum-based date range calculation
+        try:
+            start_date_obj, end_date_obj = calculate_date_range(range_type)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid range_type: {str(e)}")
+    else:
+        # Parse individual dates as before
+        if start_date:
+            try:
+                start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid start_date format. Use YYYY-MM-DD")
+
+        if end_date:
+            try:
+                end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid end_date format. Use YYYY-MM-DD")
 
     # Generate CSV data based on type
     output = io.StringIO()
     writer = csv.writer(output)
 
     if type == "summary":
-        summary_data = Analytics.get_summary_data()
+        summary_data = Analytics.get_summary_data(start_date_obj, end_date_obj)
         writer.writerow(["Metric", "Value"])
-        writer.writerow(["Total Conversations", summary_data.total_conversations])
+        writer.writerow(["Total chats", summary_data.total_chats])
         writer.writerow(["Total Time Saved (minutes)", summary_data.total_time_saved])
-        writer.writerow(["Average Time Saved per Conversation", summary_data.avg_time_saved_per_conversation])
+        writer.writerow(["Average Time Saved per chat", summary_data.avg_time_saved_per_chat])
         writer.writerow(["Confidence Level", summary_data.confidence_level])
 
     elif type == "daily":
-        writer.writerow(["Date", "Conversations", "Time Saved", "Avg Confidence"])
-        daily_data = Analytics.get_daily_trend_data(30)  # Last 30 days for export
+        writer.writerow(["Date", "chats", "Time Saved", "Avg Confidence"])
+        daily_data = Analytics.get_trends_data(start_date_obj, end_date_obj)  # Use date range for export
         for item in daily_data:
-            writer.writerow([item.date, item.conversations, item.time_saved, item.avg_confidence])
+            writer.writerow([item.date, item.chats, item.time_saved, item.avg_confidence])
 
     elif type == "detailed":
-        writer.writerow(["Conversation ID", "User", "Created At", "Time Saved", "Confidence", "Summary"])
-        conversations = Analytics.get_conversations_data(1000, 0)  # Large limit for export
-        for conv in conversations:
+        writer.writerow(["chat ID", "User", "Created At", "Time Saved", "Confidence", "Summary"])
+        chats = Analytics.get_chats_data(1000, 0, False, start_date_obj, end_date_obj)  # Large limit for export
+        for conv in chats:
             writer.writerow([conv.id, conv.user_name, conv.created_at, conv.time_saved, conv.confidence, conv.summary])
 
     else:
@@ -241,7 +398,7 @@ async def export_analytics_data(
     )
 
 
-@router.post("/trigger-processing")
+@router.post("/trigger-processing", response_model=ProcessingTriggerResponse)
 @log_api_request("trigger_processing")
 async def trigger_analytics_processing(
     date: str = None,
@@ -298,23 +455,61 @@ async def trigger_analytics_processing(
 
         log.info("🚀 Starting analytics processor...")
 
-        # Process conversations for the target date
-        result = await processor.process_conversations_for_date(target_date)
+        # Process chats for the target date
+        result = await processor.process_chats_for_date(target_date)
 
         log.info("📊 Processing completed, preparing response...")
 
+        # Invalidate analytics cache after successful processing
+        if result.status != 'failed':
+            from open_webui.cogniforce_models.analytics_tables import Analytics
+
+            log.info("🔄 Invalidating analytics cache after successful processing...")
+
+            # Use the decorator's invalidate_cache method for each cached function
+            # Note: We need to call with the same parameters that might be cached
+
+            # Invalidate summary data (no parameters)
+            Analytics.get_summary_data.invalidate_cache(Analytics)
+
+            # Invalidate trends data cache
+            try:
+                Analytics.get_trends_data.invalidate_cache(Analytics)
+            except:
+                pass  # Skip if this specific cache key doesn't exist
+
+            # Invalidate common user breakdown limits
+            for limit in [10, 20, 50]:
+                try:
+                    Analytics.get_user_breakdown_data.invalidate_cache(Analytics, limit)
+                except:
+                    pass
+
+            # Invalidate common chat data pages
+            for limit in [20, 50, 100]:
+                for offset in [0, 20, 40]:
+                    try:
+                        Analytics.get_chats_data.invalidate_cache(Analytics, limit, offset)
+                    except:
+                        pass
+
+            # Invalidate health status (no parameters)
+            Analytics.get_health_status_data.invalidate_cache(Analytics)
+
+            log.info("✅ Cache invalidation completed using decorator methods")
+
         # Return detailed processing results
-        return {
-            "status": "completed" if result.get('status') != 'failed' else "failed",
-            "target_date": target_date.isoformat(),
-            "message": f"Analytics processing completed for {target_date}",
-            "processing_log_id": result.get('processing_log_id'),
-            "conversations_processed": result.get('conversations_processed', 0),
-            "conversations_failed": result.get('conversations_failed', 0),
-            "duration_seconds": result.get('duration_seconds', 0),
-            "total_cost_usd": result.get('total_cost_usd', 0.0),
-            "model_used": ANALYTICS_MODEL.value
-        }
+        return ProcessingTriggerResponse(
+            status="completed" if result.status != 'failed' else "failed",
+            target_date=target_date.isoformat(),
+            message=f"Analytics processing completed for {target_date}",
+            processing_log_id=result.processing_log_id,
+            chats_processed=result.chats_processed,
+            chats_failed=result.chats_failed,
+            duration_seconds=result.duration_seconds,
+            total_cost_usd=result.total_cost_usd,
+            model_used=ANALYTICS_MODEL.value
+        )
 
     except HTTPException:
         # Re-raise HTTP exceptions as-is

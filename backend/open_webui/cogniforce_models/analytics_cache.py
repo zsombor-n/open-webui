@@ -245,10 +245,13 @@ def cached(ttl: int = 300, key_prefix: str = "analytics"):
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
+            # Skip 'self' for instance methods when generating cache key
+            cache_args = args[1:] if args and hasattr(args[0], '__class__') else args
+
             # Generate cache key
             cache_key = analytics_cache._generate_cache_key(
                 f"{key_prefix}:{func.__name__}",
-                *args,
+                *cache_args,
                 **kwargs
             )
 
@@ -278,7 +281,9 @@ def cached(ttl: int = 300, key_prefix: str = "analytics"):
 
         # Add cache control methods to the wrapped function
         wrapper.cache_key_generator = lambda *a, **kw: analytics_cache._generate_cache_key(
-            f"{key_prefix}:{func.__name__}", *a, **kw
+            f"{key_prefix}:{func.__name__}",
+            *(a[1:] if a and hasattr(a[0], '__class__') else a),
+            **kw
         )
         wrapper.invalidate_cache = lambda *a, **kw: analytics_cache.delete(
             wrapper.cache_key_generator(*a, **kw)
