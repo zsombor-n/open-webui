@@ -24,7 +24,9 @@
       "Bash(tail:*)",
       "Bash(netstat:*)",
       "Bash(taskkill:*)",
-      "Bash(timeout 30 uv run open-webui dev)"
+      "Bash(timeout 30 uv run open-webui dev)",
+      "Bash(tasklist)",
+      "Bash(timeout:*)"
     ],
     "deny": [],
     "ask": []

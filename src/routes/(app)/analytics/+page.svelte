@@ -4,7 +4,7 @@
 	import ArrowDownTray from '$lib/components/icons/ArrowDownTray.svelte';
 	import LockClosed from '$lib/components/icons/LockClosed.svelte';
 	import { toast } from 'svelte-sonner';
-	import { user } from '$lib/stores';
+	import { user, config, showSidebar } from '$lib/stores';
 	import AnalyticsNavbar from '$lib/components/analytics/Navbar.svelte';
 	import {
 		getAnalyticsSummary,
@@ -15,7 +15,7 @@
 		exportAnalyticsData,
 		triggerAnalyticsProcessing
 	} from '$lib/apis/analytics';
-	import { type DateRangeValue, calculateLast7Days } from '$lib/utils/dateRanges';
+	import { type DateRangeValue, calculateLast7Days, calculateDateRange } from '$lib/utils/dateRanges';
 
 	const i18n = getContext('i18n');
 
@@ -56,33 +56,62 @@
 			// Load all analytics data using range type (backend calculates dates with Pendulum)
 			// Note: Daily trend always shows last 7 days regardless of selected range
 			const last7Days = calculateLast7Days();
-			const [summary, dailyTrend, userBreakdown, health, chats] = await Promise.allSettled([
-				getAnalyticsSummary($user.token, undefined, undefined, selectedDateRange),
-				getAnalyticsTrends($user.token, last7Days.startDate, last7Days.endDate),
-				getAnalyticsUserBreakdown($user.token, 10, undefined, undefined, selectedDateRange),
-				getAnalyticsHealth($user.token),
-				getAnalyticsChats($user.token, 10, 0, false, undefined, undefined, selectedDateRange)
-			]);
+
+			// Convert quarter-based ranges to actual dates (backend doesn't support "quarter" range type)
+			const isQuarterRange = selectedDateRange.includes('quarter');
+			const dateRange = isQuarterRange ? calculateDateRange(selectedDateRange) : null;
+
+			// Use either calculated dates (for quarters) or range type (for week/month/year)
+			const startDate = isQuarterRange ? dateRange.startDate : undefined;
+			const endDate = isQuarterRange ? dateRange.endDate : undefined;
+			const rangeType = isQuarterRange ? undefined : selectedDateRange;
+
+			// Build promises array conditionally based on feature flags
+			const promises: Record<string, Promise<any>> = {
+				summary: getAnalyticsSummary($user.token, startDate, endDate, rangeType),
+				dailyTrend: getAnalyticsTrends($user.token, last7Days.startDate, last7Days.endDate),
+				health: getAnalyticsHealth($user.token)
+			};
+
+			// Only fetch user breakdown if feature flag is enabled
+			if ($config?.features?.enable_user_breakdown ?? false) {
+				promises.userBreakdown = getAnalyticsUserBreakdown($user.token, 10, startDate, endDate, rangeType);
+			}
+
+			// Only fetch chats if feature flag is enabled
+			if ($config?.features?.enable_top_chats ?? false) {
+				promises.chats = getAnalyticsChats($user.token, 10, 0, false, startDate, endDate, rangeType);
+			}
+
+			const results = await Promise.allSettled(Object.values(promises));
+			const keys = Object.keys(promises);
 
 			// Handle successful responses
-			if (summary.status === 'fulfilled' && summary.value) {
-				analyticsData.summary = summary.value;
-			}
-			if (dailyTrend.status === 'fulfilled' && dailyTrend.value) {
-				analyticsData.dailyTrend = dailyTrend.value || [];
-			}
-			if (userBreakdown.status === 'fulfilled' && userBreakdown.value) {
-				analyticsData.userBreakdown = userBreakdown.value || [];
-			}
-			if (health.status === 'fulfilled' && health.value) {
-				analyticsData.health = health.value;
-			}
-			if (chats.status === 'fulfilled' && chats.value) {
-				analyticsData.recentChats = chats.value || [];
-			}
+			results.forEach((result, index) => {
+				const key = keys[index];
+				if (result.status === 'fulfilled' && result.value) {
+					switch (key) {
+						case 'summary':
+							analyticsData.summary = result.value;
+							break;
+						case 'dailyTrend':
+							analyticsData.dailyTrend = result.value || [];
+							break;
+						case 'userBreakdown':
+							analyticsData.userBreakdown = result.value || [];
+							break;
+						case 'health':
+							analyticsData.health = result.value;
+							break;
+						case 'chats':
+							analyticsData.recentChats = result.value || [];
+							break;
+					}
+				}
+			});
 
 			// Check if any requests failed with 404 (API not implemented)
-			const hasNotFound = [summary, dailyTrend, userBreakdown, health, chats].some(
+			const hasNotFound = results.some(
 				result => result.status === 'rejected' && result.reason?.status === 404
 			);
 
@@ -106,7 +135,16 @@
 		}
 
 		try {
-			const blob = await exportAnalyticsData($user.token, 'csv', type, undefined, undefined, selectedDateRange);
+			// Convert quarter-based ranges to actual dates (backend doesn't support "quarter" range type)
+			const isQuarterRange = selectedDateRange.includes('quarter');
+			const dateRange = isQuarterRange ? calculateDateRange(selectedDateRange) : null;
+
+			// Use either calculated dates (for quarters) or range type (for week/month/year)
+			const startDate = isQuarterRange ? dateRange.startDate : undefined;
+			const endDate = isQuarterRange ? dateRange.endDate : undefined;
+			const rangeType = isQuarterRange ? undefined : selectedDateRange;
+
+			const blob = await exportAnalyticsData($user.token, 'csv', type, startDate, endDate, rangeType);
 			if (blob) {
 				const url = window.URL.createObjectURL(blob);
 				const link = document.createElement('a');
@@ -248,7 +286,7 @@
 </svelte:head>
 
 <!-- Main Layout Container -->
-<div class="h-screen max-h-[100dvh] w-full flex flex-col">
+<div class="flex-1 flex flex-col h-full overflow-hidden {$showSidebar ? 'md:max-w-[calc(100%-260px)]' : ''}">
 	<!-- Analytics Navbar -->
 	{#if hasAccess}
 		<AnalyticsNavbar
@@ -389,12 +427,68 @@
 			<!-- Charts Section -->
 			{#if !analyticsData.loading && !analyticsData.error}
 				<div class="grid grid-cols-1 xl:grid-cols-2 gap-6 lg:gap-8 mb-8">
+					<!-- Cogniforce EfX Card -->
+					<div class="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 shadow-sm">
+						<!-- Top Row: 75% height - Main EfX Score -->
+						<div class="flex flex-col h-full">
+							<div class="flex-[3] flex items-center justify-center border-b border-gray-200 dark:border-gray-700 pb-4 mb-4">
+								<div class="text-center">
+									<div class="flex items-center justify-center gap-2 mb-3">
+										<svg class="w-10 h-10 text-cyan-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+										</svg>
+										<p class="text-xl font-medium text-gray-600 dark:text-gray-300">Cogniforce EfX™</p>
+									</div>
+									<p class="text-8xl font-bold text-gray-900 dark:text-white leading-none">
+										{analyticsData.summary?.efxScore || '0'}
+									</p>
+									<p class="text-base text-gray-500 dark:text-gray-400 mt-2">Efficiency Index</p>
+								</div>
+							</div>
+
+							<!-- Bottom Row: 25% height - 4 Components -->
+							<div class="flex-[1] grid grid-cols-4 gap-3">
+								<!-- Velocity -->
+								<div class="text-center">
+									<p class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Velocity <span class="text-green-600 dark:text-green-400">↑</span></p>
+									<p class="text-3xl font-bold text-blue-600 dark:text-blue-400">
+										{analyticsData.summary?.efxSpeed || '0'}
+									</p>
+								</div>
+
+								<!-- Quality -->
+								<div class="text-center">
+									<p class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Quality <span class="text-green-600 dark:text-green-400">✓</span></p>
+									<p class="text-3xl font-bold text-green-600 dark:text-green-400">
+										{analyticsData.summary?.efxQuality || '0'}
+									</p>
+								</div>
+
+								<!-- Safety -->
+								<div class="text-center">
+									<p class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Safety <span class="text-green-600 dark:text-green-400">✓</span></p>
+									<p class="text-3xl font-bold text-orange-600 dark:text-orange-400">
+										{analyticsData.summary?.efxSafety || '0'}
+									</p>
+								</div>
+
+								<!-- Cost Efficiency -->
+								<div class="text-center">
+									<p class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Cost Efficiency <span class="text-green-600 dark:text-green-400">↑</span></p>
+									<p class="text-3xl font-bold text-purple-600 dark:text-purple-400">
+										{analyticsData.summary?.efxCost || '0'}
+									</p>
+								</div>
+							</div>
+						</div>
+					</div>
+
 					<!-- Daily Trend Chart -->
 					<div class="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 shadow-sm">
 						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Daily Time Savings Trend</h3>
-						<div class="h-48 sm:h-64 flex items-end gap-2 sm:gap-3">
+						<div class="h-40 sm:h-52 flex items-end gap-3 sm:gap-4">
 							{#each sortedDailyTrend as day, index}
-								<div class="flex flex-col items-center flex-1">
+								<div class="flex flex-col items-center flex-1 px-0.5">
 									<div
 										class="{day.timeSaved > 0 ? 'bg-blue-500 hover:bg-blue-600' : 'bg-gray-300 dark:bg-gray-600'} rounded-t transition-all duration-300 w-full relative flex items-center justify-center"
 										style="height: {calculateBarHeight(day.timeSaved, maxTimeSaved)}px;"
@@ -425,6 +519,7 @@
 					</div>
 
 					<!-- User Breakdown -->
+					{#if ($config?.features?.enable_user_breakdown ?? false) && $user?.role === 'admin'}
 					<div class="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 shadow-sm">
 						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Top Users by Time Saved</h3>
 						{#if analyticsData.userBreakdown && analyticsData.userBreakdown.length > 0}
@@ -461,100 +556,10 @@
 							</div>
 						{/if}
 					</div>
-				</div>
-
-				<!-- Enhanced Analytics Sections -->
-				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-					<!-- Time Analysis Breakdown - Currently not supported by backend API -->
-					<!--
-					<div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm">
-						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Time Analysis</h3>
-						{#if analyticsData.summary}
-							<div class="space-y-3">
-								<div class="flex justify-between items-center">
-									<span class="text-sm text-gray-600 dark:text-gray-300">Active Time:</span>
-									<span class="font-medium text-gray-900 dark:text-white">
-										{analyticsData.summary.totalActiveTime ? formatMinutes(analyticsData.summary.totalActiveTime) : '0m'}
-									</span>
-								</div>
-								<div class="flex justify-between items-center">
-									<span class="text-sm text-gray-600 dark:text-gray-300">Idle Time:</span>
-									<span class="font-medium text-gray-900 dark:text-white">
-										{analyticsData.summary.totalIdleTime ? formatMinutes(analyticsData.summary.totalIdleTime) : '0m'}
-									</span>
-								</div>
-								<div class="flex justify-between items-center">
-									<span class="text-sm text-gray-600 dark:text-gray-300">Efficiency:</span>
-									<span class="font-medium text-green-600 dark:text-green-400">
-										{analyticsData.summary.efficiencyRate || 0}%
-									</span>
-								</div>
-								<div class="mt-4">
-									<div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-										<div
-											class="bg-green-500 h-2 rounded-full transition-all duration-300"
-											style="width: {analyticsData.summary.efficiencyRate || 0}%"
-										></div>
-									</div>
-									<p class="text-xs text-gray-600 dark:text-gray-300 mt-1">Overall efficiency score</p>
-								</div>
-							</div>
-						{:else}
-							<div class="text-center py-6 text-gray-500 dark:text-gray-400">
-								<p>No time analysis data</p>
-								<p class="text-sm mt-1">API not implemented</p>
-							</div>
-						{/if}
-					</div>
-					-->
-
-					<!-- System Health Status -->
-					<div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm">
-						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Processing Status</h3>
-						{#if analyticsData.health}
-							<div class="space-y-3">
-								<div class="flex items-center justify-between">
-									<span class="text-sm text-gray-600 dark:text-gray-300">Status:</span>
-									<span class="px-2 py-1 rounded text-xs font-medium
-										{analyticsData.health.status === 'success' || analyticsData.health.status === 'healthy' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
-										 analyticsData.health.status === 'running' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' :
-										 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'}">
-										{analyticsData.health.status}
-									</span>
-								</div>
-								<div class="flex justify-between items-center">
-									<span class="text-sm text-gray-600 dark:text-gray-300">Last Run:</span>
-									<span class="font-medium text-gray-900 dark:text-white text-sm">
-										{formatDateTime(analyticsData.health.lastProcessingRun)}
-									</span>
-								</div>
-								<!-- Processed count and processing time not available in current backend API -->
-								<!--
-								<div class="flex justify-between items-center">
-									<span class="text-sm text-gray-600 dark:text-gray-300">Processed:</span>
-									<span class="font-medium text-gray-900 dark:text-white">
-										{analyticsData.health.processedCount} chats
-									</span>
-								</div>
-								{#if analyticsData.health.processingTime}
-									<div class="flex justify-between items-center">
-										<span class="text-sm text-gray-600 dark:text-gray-300">Processing Time:</span>
-										<span class="font-medium text-gray-900 dark:text-white">
-											{analyticsData.health.processingTime}s
-										</span>
-									</div>
-								{/if}
-								-->
-							</div>
-						{:else}
-							<div class="text-center py-6 text-gray-500 dark:text-gray-400">
-								<p>System health unavailable</p>
-								<p class="text-sm mt-1">Health API not implemented</p>
-							</div>
-						{/if}
-					</div>
+					{/if}
 
 					<!-- Recent Chats -->
+					{#if ($config?.features?.enable_top_chats ?? false) && $user?.role === 'admin'}
 					<div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm">
 						<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Recent Chats</h3>
 						{#if analyticsData.recentChats && analyticsData.recentChats.length > 0}
@@ -590,24 +595,40 @@
 							</div>
 						{/if}
 					</div>
+					{/if}
 				</div>
 			{/if}
 
 			<!-- System Info -->
 			{#if !analyticsData.loading && !analyticsData.error}
 				<div class="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 shadow-sm">
-					<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">System Information</h3>
-					<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+					<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">System Information & Processing Status</h3>
+					<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+						<div>
+							<p class="text-gray-600 dark:text-gray-300">Processing Status</p>
+							<p class="font-medium text-gray-900 dark:text-white">
+								{#if analyticsData.health}
+									<span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium
+										{analyticsData.health.status === 'success' || analyticsData.health.status === 'healthy' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+										 analyticsData.health.status === 'running' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' :
+										 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'}">
+										{analyticsData.health.status}
+									</span>
+								{:else}
+									<span class="text-gray-500">Unknown</span>
+								{/if}
+							</p>
+						</div>
+						<div>
+							<p class="text-gray-600 dark:text-gray-300">Last Processing Run</p>
+							<p class="font-medium text-gray-900 dark:text-white">
+								{formatDateTime(analyticsData.health?.lastProcessingRun)}
+							</p>
+						</div>
 						<div>
 							<p class="text-gray-600 dark:text-gray-300">Timezone</p>
 							<p class="font-medium text-gray-900 dark:text-white">
 								{analyticsData.health?.systemInfo?.timezone || 'UTC'}
-							</p>
-						</div>
-						<div>
-							<p class="text-gray-600 dark:text-gray-300">Last Analysis</p>
-							<p class="font-medium text-gray-900 dark:text-white">
-								{formatDateTime(analyticsData.health?.lastProcessingRun)}
 							</p>
 						</div>
 						<div>
@@ -618,7 +639,7 @@
 						</div>
 						{#if analyticsData.health?.nextScheduledRun}
 							<div>
-								<p class="text-gray-600 dark:text-gray-300">Next Run</p>
+								<p class="text-gray-600 dark:text-gray-300">Next Scheduled Run</p>
 								<p class="font-medium text-gray-900 dark:text-white">
 									{formatDateTime(analyticsData.health.nextScheduledRun)}
 								</p>

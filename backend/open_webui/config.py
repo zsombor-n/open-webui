@@ -1407,6 +1407,24 @@ ENABLE_NOTES = PersistentConfig(
     os.environ.get("ENABLE_NOTES", "True").lower() == "true",
 )
 
+CF_ANALYTICS = PersistentConfig(
+    "CF_ANALYTICS",
+    "features.analytics",
+    os.environ.get("CF_ANALYTICS", "False").lower() == "true",
+)
+
+CF_USER_BREAKDOWN = PersistentConfig(
+    "CF_USER_BREAKDOWN",
+    "features.analytics.user_breakdown",
+    os.environ.get("CF_USER_BREAKDOWN", "False").lower() == "true",
+)
+
+CF_TOP_CHATS = PersistentConfig(
+    "CF_TOP_CHATS",
+    "features.analytics.top_chats",
+    os.environ.get("CF_TOP_CHATS", "False").lower() == "true",
+)
+
 ENABLE_EVALUATION_ARENA_MODELS = PersistentConfig(
     "ENABLE_EVALUATION_ARENA_MODELS",
     "evaluation.arena.enable",

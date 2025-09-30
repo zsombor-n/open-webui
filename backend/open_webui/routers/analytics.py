@@ -1,3 +1,15 @@
+"""
+Analytics API Router
+
+This router provides endpoints for the Cogniforce analytics dashboard.
+
+**Feature Flag**: This router requires CF_ANALYTICS=true to be enabled.
+When CF_ANALYTICS is disabled, this router will not be registered and all
+analytics endpoints will return 404.
+
+**Access Control**: All endpoints require admin authentication.
+"""
+
 import logging
 import time
 import uuid

@@ -250,6 +250,9 @@ type Config = {
 		enable_api_key: boolean;
 		enable_signup: boolean;
 		enable_login_form: boolean;
+		enable_analytics?: boolean;
+		enable_user_breakdown?: boolean;
+		enable_top_chats?: boolean;
 		enable_web_search?: boolean;
 		enable_google_drive_integration: boolean;
 		enable_onedrive_integration: boolean;

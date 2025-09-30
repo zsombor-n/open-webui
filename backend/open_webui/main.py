@@ -332,6 +332,9 @@ from open_webui.config import (
     API_KEY_ALLOWED_ENDPOINTS,
     ENABLE_CHANNELS,
     ENABLE_NOTES,
+    CF_ANALYTICS,
+    CF_USER_BREAKDOWN,
+    CF_TOP_CHATS,
     ENABLE_COMMUNITY_SHARING,
     ENABLE_MESSAGE_RATING,
     ENABLE_USER_WEBHOOKS,
@@ -598,26 +601,31 @@ async def lifespan(app: FastAPI):
             None,
         )
 
-    # Initialize Analytics Scheduler
-    log.info("Initializing Analytics Scheduler...")
-    try:
-        from open_webui.services.analytics_scheduler import AnalyticsScheduler
-        from open_webui.config import (
-            ANALYTICS_OPENAI_API_KEY,
-            ANALYTICS_DAILY_PROCESSING_ENABLED
-        )
+    # Initialize Analytics Scheduler (if feature enabled)
+    from open_webui.config import CF_ANALYTICS
 
-        analytics_scheduler = AnalyticsScheduler(
-            openai_api_key=ANALYTICS_OPENAI_API_KEY.value,
-            enabled=ANALYTICS_DAILY_PROCESSING_ENABLED.value
-        )
+    if CF_ANALYTICS.value:
+        log.info("Initializing Analytics Scheduler...")
+        try:
+            from open_webui.services.analytics_scheduler import AnalyticsScheduler
+            from open_webui.config import (
+                ANALYTICS_OPENAI_API_KEY,
+                ANALYTICS_DAILY_PROCESSING_ENABLED
+            )
 
-        await analytics_scheduler.start()
-        app.state.analytics_scheduler = analytics_scheduler
-        log.info("Analytics Scheduler initialized successfully")
-    except Exception as e:
-        log.error(f"Failed to initialize Analytics Scheduler: {e}")
-        log.warning("Continuing without scheduled analytics processing")
+            analytics_scheduler = AnalyticsScheduler(
+                openai_api_key=ANALYTICS_OPENAI_API_KEY.value,
+                enabled=ANALYTICS_DAILY_PROCESSING_ENABLED.value
+            )
+
+            await analytics_scheduler.start()
+            app.state.analytics_scheduler = analytics_scheduler
+            log.info("Analytics Scheduler initialized successfully")
+        except Exception as e:
+            log.error(f"Failed to initialize Analytics Scheduler: {e}")
+            log.warning("Continuing without scheduled analytics processing")
+    else:
+        log.info("Analytics feature is disabled (CF_ANALYTICS=false). Skipping scheduler initialization.")
 
     yield
 
@@ -770,6 +778,9 @@ app.state.config.MODEL_ORDER_LIST = MODEL_ORDER_LIST
 
 app.state.config.ENABLE_CHANNELS = ENABLE_CHANNELS
 app.state.config.ENABLE_NOTES = ENABLE_NOTES
+app.state.config.CF_ANALYTICS = CF_ANALYTICS
+app.state.config.CF_USER_BREAKDOWN = CF_USER_BREAKDOWN
+app.state.config.CF_TOP_CHATS = CF_TOP_CHATS
 app.state.config.ENABLE_COMMUNITY_SHARING = ENABLE_COMMUNITY_SHARING
 app.state.config.ENABLE_MESSAGE_RATING = ENABLE_MESSAGE_RATING
 app.state.config.ENABLE_USER_WEBHOOKS = ENABLE_USER_WEBHOOKS
@@ -1285,7 +1296,10 @@ app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
 
 app.include_router(auths.router, prefix="/api/v1/auths", tags=["auths"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
-app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
+
+# Register analytics router only if feature is enabled
+if CF_ANALYTICS:
+    app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 
 
 app.include_router(channels.router, prefix="/api/v1/channels", tags=["channels"])
@@ -1733,6 +1747,9 @@ async def get_app_config(request: Request):
                     "enable_direct_connections": app.state.config.ENABLE_DIRECT_CONNECTIONS,
                     "enable_channels": app.state.config.ENABLE_CHANNELS,
                     "enable_notes": app.state.config.ENABLE_NOTES,
+                    "enable_analytics": app.state.config.CF_ANALYTICS,
+                    "enable_user_breakdown": app.state.config.CF_USER_BREAKDOWN,
+                    "enable_top_chats": app.state.config.CF_TOP_CHATS,
                     "enable_web_search": app.state.config.ENABLE_WEB_SEARCH,
                     "enable_code_execution": app.state.config.ENABLE_CODE_EXECUTION,
                     "enable_code_interpreter": app.state.config.ENABLE_CODE_INTERPRETER,

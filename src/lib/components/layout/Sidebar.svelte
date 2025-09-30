@@ -652,27 +652,29 @@
 					</div>
 				{/if}
 
-				<div class="">
-					<Tooltip content={$i18n.t('Analytics')} placement="right">
-						<a
-							class=" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
-							href="/analytics"
-							on:click={async (e) => {
-								e.stopImmediatePropagation();
-								e.preventDefault();
+				{#if ($config?.features?.enable_analytics ?? false) && $user?.role === 'admin'}
+					<div class="">
+						<Tooltip content={$i18n.t('Analytics')} placement="right">
+							<a
+								class=" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition group"
+								href="/analytics"
+								on:click={async (e) => {
+									e.stopImmediatePropagation();
+									e.preventDefault();
 
-								goto('/analytics');
-								itemClickHandler();
-							}}
-							aria-label={$i18n.t('Analytics')}
-							draggable="false"
-						>
-							<div class=" self-center flex items-center justify-center size-9">
-								<ChartBar className="size-4.5" />
-							</div>
-						</a>
-					</Tooltip>
-				</div>
+									goto('/analytics');
+									itemClickHandler();
+								}}
+								aria-label={$i18n.t('Analytics')}
+								draggable="false"
+							>
+								<div class=" self-center flex items-center justify-center size-9">
+									<ChartBar className="size-4.5" />
+								</div>
+							</a>
+						</Tooltip>
+					</div>
+				{/if}
 			</div>
 		</button>
 
@@ -860,23 +862,25 @@
 					</div>
 				{/if}
 
-				<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
-					<a
-						class="grow flex items-center space-x-3 rounded-lg px-2 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-						href="/analytics"
-						on:click={itemClickHandler}
-						draggable="false"
-						aria-label={$i18n.t('Analytics')}
-					>
-						<div class="self-center">
-							<ChartBar className="size-4.5" strokeWidth="2" />
-						</div>
+				{#if ($config?.features?.enable_analytics ?? false) && $user?.role === 'admin'}
+					<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
+						<a
+							class="grow flex items-center space-x-3 rounded-lg px-2 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+							href="/analytics"
+							on:click={itemClickHandler}
+							draggable="false"
+							aria-label={$i18n.t('Analytics')}
+						>
+							<div class="self-center">
+								<ChartBar className="size-4.5" strokeWidth="2" />
+							</div>
 
-						<div class="flex self-center translate-y-[0.5px]">
-							<div class=" self-center text-sm font-primary">{$i18n.t('Analytics')}</div>
-						</div>
-					</a>
-				</div>
+							<div class="flex self-center translate-y-[0.5px]">
+								<div class=" self-center text-sm font-primary">{$i18n.t('Analytics')}</div>
+							</div>
+						</a>
+					</div>
+				{/if}
 			</div>
 
 			<div class="relative flex flex-col flex-1">

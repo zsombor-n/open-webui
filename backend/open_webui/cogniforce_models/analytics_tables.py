@@ -330,6 +330,13 @@ class AnalyticsSummary(BaseModel):
     avg_time_saved_per_chat: float = Field(alias="avgTimeSavedPerChat")
     confidence_level: float = Field(alias="confidenceLevel")
 
+    # EfX (Efficiency Index) metrics
+    efx_score: float = Field(alias="efxScore", default=0.0)
+    efx_speed: float = Field(alias="efxSpeed", default=0.0)
+    efx_quality: float = Field(alias="efxQuality", default=0.0)
+    efx_safety: float = Field(alias="efxSafety", default=0.0)
+    efx_cost: float = Field(alias="efxCost", default=0.0)
+
     class Config:
         populate_by_name = True
 
@@ -594,6 +601,61 @@ class AnalyticsTable:
             )
             return f"Unknown User {user_id[:8]}..."
 
+    def _calculate_efx_metrics(self, avg_time_saved: float, avg_confidence: float) -> dict:
+        """
+        Calculate EfX (Efficiency Index) metrics using proxy values.
+
+        EfX = 100 × (S^0.4 × Q^0.3 × H^0.15 × C^0.15)
+
+        Components:
+        - S (Speed): Based on avg_time_saved_per_chat, normalized to 0-100 scale
+        - Q (Quality): Based on confidence_level (already 0-100)
+        - H (Safety): Placeholder value (85 - good but room for improvement)
+        - C (Cost): Based on ROI proxy using time_saved, normalized to 0-100 scale
+
+        Returns:
+            dict with efx_score, efx_speed, efx_quality, efx_safety, efx_cost
+        """
+        # Speed component: Normalize avg_time_saved to 0-100 scale
+        # Assumption: 60 minutes saved = 100, scale linearly
+        # Cap at 100 for values >= 60 minutes
+        speed_raw = min(avg_time_saved / 60.0 * 100, 100)
+        speed_normalized = speed_raw / 100.0  # Convert to 0-1 for formula
+
+        # Quality component: Use confidence level directly
+        # Already 0-100, convert to 0-1 for formula
+        quality_normalized = (avg_confidence / 100.0) if avg_confidence > 0 else 0.0
+
+        # Safety component: Placeholder value (0.85 = 85 out of 100)
+        # This represents good safety practices but acknowledges room for improvement
+        safety_normalized = 0.85
+
+        # Cost component: ROI proxy based on time saved
+        # Same normalization as speed - more time saved = better cost efficiency
+        # Assumption: Higher time savings indicate better ROI
+        cost_raw = min(avg_time_saved / 60.0 * 100, 100)
+        cost_normalized = cost_raw / 100.0  # Convert to 0-1 for formula
+
+        # Calculate EfX score using the weighted geometric mean formula
+        # EfX = 100 × (S^0.4 × Q^0.3 × H^0.15 × C^0.15)
+        if speed_normalized > 0 and quality_normalized > 0:
+            efx_score = 100 * (
+                (speed_normalized ** 0.4) *
+                (quality_normalized ** 0.3) *
+                (safety_normalized ** 0.15) *
+                (cost_normalized ** 0.15)
+            )
+        else:
+            efx_score = 0.0
+
+        return {
+            'efx_score': round(efx_score, 1),
+            'efx_speed': round(speed_raw, 1),
+            'efx_quality': round(avg_confidence, 1),
+            'efx_safety': round(safety_normalized * 100, 1),
+            'efx_cost': round(cost_raw, 1)
+        }
+
     @track_analytics_operation("get_summary_data")
     @cached(ttl=300, key_prefix="analytics")  # Cache for 5 minutes
     def get_summary_data(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> AnalyticsSummary:
@@ -616,11 +678,22 @@ class AnalyticsTable:
 
             result = query.first()
             if result:
+                avg_time_saved = float(result.avg_time_saved or 0)
+                avg_confidence = float(result.avg_confidence or 0)
+
+                # Calculate EfX metrics
+                efx_metrics = self._calculate_efx_metrics(avg_time_saved, avg_confidence)
+
                 return AnalyticsSummary(
                     total_chats=result.total_chats or 0,
                     total_time_saved=result.total_time_saved or 0,
-                    avg_time_saved_per_chat=float(math.ceil(result.avg_time_saved or 0)),
-                    confidence_level=float(math.ceil(result.avg_confidence or 0))
+                    avg_time_saved_per_chat=float(math.ceil(avg_time_saved)),
+                    confidence_level=float(math.ceil(avg_confidence)),
+                    efx_score=efx_metrics['efx_score'],
+                    efx_speed=efx_metrics['efx_speed'],
+                    efx_quality=efx_metrics['efx_quality'],
+                    efx_safety=efx_metrics['efx_safety'],
+                    efx_cost=efx_metrics['efx_cost']
                 )
 
             # Return empty data if no analysis exists
@@ -628,7 +701,12 @@ class AnalyticsTable:
                 total_chats=0,
                 total_time_saved=0,
                 avg_time_saved_per_chat=0.0,
-                confidence_level=0.0
+                confidence_level=0.0,
+                efx_score=0.0,
+                efx_speed=0.0,
+                efx_quality=0.0,
+                efx_safety=0.0,
+                efx_cost=0.0
             )
 
     @track_analytics_operation("get_trends_data")
