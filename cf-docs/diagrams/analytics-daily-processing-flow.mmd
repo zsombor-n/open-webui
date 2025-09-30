@@ -1,0 +1,63 @@
+sequenceDiagram
+    participant S as Analytics Scheduler
+    participant P as Analytics Processor
+    participant ODB as OpenWebUI Database
+    participant CF as Cogniforce Database
+    participant OAI as OpenAI API
+    participant LOG as Processing Log
+
+    Note over S: Daily trigger at 00:00 Europe/Budapest
+
+    S->>+P: trigger_daily_processing(yesterday)
+    P->>LOG: create_processing_run("started")
+
+    Note over P: Query conversations from previous day
+    P->>+ODB: SELECT chats WHERE DATE(updated_at) = target_date
+    ODB-->>-P: List of ChatModel (conversation data)
+
+    Note over P: Process conversations in batches
+    loop For each batch of 100 conversations
+        P->>P: validate_conversation_data()
+
+        alt Conversation not yet processed
+            P->>P: extract_messages_and_timing()
+            P->>P: create_conversation_summary()
+            P->>+OAI: get_manual_time_estimate(summary)
+            OAI-->>-P: TimeEstimate with low, likely, high, confidence
+            P->>P: calculate_time_savings()
+            P->>+CF: save_conversation_analysis()
+            CF-->>-P: ConversationAnalysis saved
+        else Already processed
+            P->>P: skip_conversation()
+        end
+
+        Note over P: Rate limiting - max 50 OpenAI requests/minute
+        P->>P: enforce_rate_limit()
+    end
+
+    Note over P: Generate daily aggregates
+    P->>+CF: SELECT conversation_analysis WHERE DATE(processed_at) = target_date
+    CF-->>-P: List[ConversationAnalysis]
+
+    P->>P: calculate_user_aggregates()
+    P->>P: calculate_global_aggregates()
+
+    P->>+CF: upsert_daily_aggregates()
+    CF-->>-P: DailyAggregates saved
+
+    Note over P: Invalidate cached dashboard data
+    P->>P: invalidate_analytics_cache()
+
+    P->>LOG: update_processing_run("completed", stats)
+    P-->>-S: ProcessingResults with processed_count, errors, duration
+
+    Note over S: Schedule next run for tomorrow
+
+    rect rgb(255, 240, 240)
+        Note over S,LOG: Error Handling Flow
+        alt Processing fails
+            P->>LOG: update_processing_run("failed", error_details)
+            P->>P: send_error_notification()
+            P->>S: retry_after_delay(5_minutes)
+        end
+    end

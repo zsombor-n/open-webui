@@ -1,0 +1,144 @@
+sequenceDiagram
+    participant P as Analytics Processor
+    participant CF as Cogniforce Database
+    participant AGG as Aggregation Engine
+    participant CACHE as Analytics Cache
+    participant API as Analytics API
+    participant DASH as Dashboard Frontend
+    participant ODB as OpenWebUI Database
+
+    Note over P: Daily aggregation after conversation processing
+
+    P->>+CF: SELECT conversation_analysis WHERE DATE(processed_at) = target_date
+    CF-->>-P: List of ConversationAnalysis (day's processed conversations)
+
+    Note over P: Calculate user-level aggregates
+    P->>+AGG: calculate_user_aggregates(conversations_by_user)
+
+    rect rgb(240, 248, 255)
+        Note over AGG: User-Level Calculations
+        loop For each user_id_hash
+            AGG->>AGG: sum_conversation_count()
+            AGG->>AGG: sum_total_time_saved()
+            AGG->>AGG: calculate_avg_time_per_conversation()
+            AGG->>AGG: calculate_avg_confidence_level()
+            AGG->>AGG: count_message_totals()
+        end
+    end
+
+    AGG-->>-P: Map of user_hash to UserDailyMetrics
+
+    Note over P: Calculate global aggregates
+    P->>+AGG: calculate_global_aggregates(all_conversations)
+
+    rect rgb(248, 255, 248)
+        Note over AGG: Global-Level Calculations
+        AGG->>AGG: sum_all_conversations()
+        AGG->>AGG: sum_total_time_saved_all_users()
+        AGG->>AGG: calculate_system_avg_time_savings()
+        AGG->>AGG: calculate_system_confidence_level()
+        AGG->>AGG: identify_top_time_savers()
+    end
+
+    AGG-->>-P: GlobalDailyMetrics
+
+    Note over P: Store aggregates in database
+    loop For each user aggregate
+        P->>+CF: upsert_daily_aggregate(date, user_hash, metrics)
+        CF-->>-P: DailyAggregate saved
+    end
+
+    P->>+CF: upsert_daily_aggregate(date, null, global_metrics)
+    CF-->>-P: Global DailyAggregate saved
+
+    Note over P: Invalidate cached dashboard data
+    P->>+CACHE: invalidate_pattern("analytics_*")
+
+    rect rgb(255, 248, 240)
+        Note over CACHE: Cache Invalidation
+        CACHE->>CACHE: clear_summary_cache()
+        CACHE->>CACHE: clear_daily_trend_cache()
+        CACHE->>CACHE: clear_user_breakdown_cache()
+        CACHE->>CACHE: clear_conversation_list_cache()
+    end
+
+    CACHE-->>-P: cache_cleared
+
+    Note over P: Update trend calculations
+    P->>+CF: SELECT daily_aggregates WHERE date >= (today - 30 days)
+    CF-->>-P: List of DailyAggregate (30-day history)
+
+    P->>+AGG: calculate_trend_metrics(30_day_history)
+    AGG->>AGG: calculate_growth_rates()
+    AGG->>AGG: identify_usage_patterns()
+    AGG->>AGG: calculate_moving_averages()
+    AGG-->>-P: TrendMetrics
+
+    P->>+CF: upsert_trend_analysis(trend_metrics)
+    CF-->>-P: TrendAnalysis saved
+
+    Note over P,DASH: Dashboard Data Flow (Real-time)
+
+    Note over DASH: User opens analytics dashboard
+    DASH->>+API: GET /api/v1/analytics/summary
+
+    API->>CACHE: get_cached("analytics_summary")
+
+    alt Cache hit
+        CACHE-->>API: cached_summary_data
+    else Cache miss
+        CACHE-->>API: null
+
+        Note over API: Generate fresh summary
+        API->>+CF: get_latest_aggregates()
+        CF-->>-API: aggregated_data
+
+        API->>API: format_dashboard_response()
+        API->>CACHE: cache("analytics_summary", data, ttl=5min)
+    end
+
+    API-->>-DASH: AnalyticsSummary with total_conversations, total_time_saved, avg_per_conversation, confidence_level
+
+    Note over DASH: User requests trend data
+    DASH->>+API: GET /api/v1/analytics/daily-trend?days=7
+
+    API->>+CF: SELECT daily_aggregates WHERE date >= (today - 7 days)
+    CF-->>-API: List[DailyAggregate]
+
+    API->>API: format_trend_response()
+    API-->>-DASH: DailyTrend array (7-day data)
+
+    Note over DASH: User requests user breakdown
+    DASH->>+API: GET /api/v1/analytics/user-breakdown
+
+    API->>+CF: get_top_users_by_time_saved(limit=10)
+    CF-->>-API: List of UserMetrics
+
+    Note over API: Fetch real user names from OpenWebUI
+    API->>+ODB: get_user_names(user_id_hashes)
+    ODB-->>-API: Map of hash to Name and email
+
+    API->>API: combine_metrics_with_names()
+    API-->>-DASH: UserBreakdown array (top 10 users)
+
+    rect rgb(255, 240, 240)
+        Note over P,DASH: Error Scenarios
+        alt Aggregation calculation fails
+            AGG-->>P: AggregationError
+            P->>P: log_aggregation_error()
+            P->>P: use_previous_day_baseline()
+
+        else Database connection fails
+            CF-->>API: ConnectionError
+            API->>API: return_cached_stale_data()
+            API->>API: log_database_connectivity_issue()
+
+        else Cache service unavailable
+            Note over CACHE: Cache service is unavailable
+            API->>API: detect_cache_unavailable()
+            API->>API: serve_directly_from_database()
+            API->>API: log_cache_service_issue()
+        end
+    end
+
+    Note over DASH: Display real-time analytics with fresh data

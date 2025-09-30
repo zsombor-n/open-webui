@@ -1,0 +1,111 @@
+sequenceDiagram
+    participant P as Analytics Processor
+    participant RATE as Rate Limiter
+    participant CLIENT as OpenAI Client
+    participant API as OpenAI API
+    participant PARSER as Response Parser
+    participant CACHE as Response Cache
+
+    Note over P: Prepare LLM request for time estimation
+
+    P->>P: validate_conversation_summary()
+
+    Note over P: Check rate limits (50 requests/minute)
+    P->>RATE: check_rate_limit()
+
+    alt Rate limit OK
+        RATE-->>P: proceed
+    else Rate limit exceeded
+        RATE-->>P: wait_time_seconds
+        P->>P: sleep(wait_time)
+        P->>RATE: check_rate_limit()
+    end
+
+    Note over P: Check if estimate cached
+    P->>CACHE: get_cached_estimate(summary_hash)
+
+    alt Cache hit
+        CACHE-->>P: cached_estimate
+        P->>P: return cached_result
+    else Cache miss
+        CACHE-->>P: null
+    end
+
+    Note over P: Prepare OpenAI request
+    P->>P: create_time_estimation_prompt(summary)
+
+    rect rgb(240, 248, 255)
+        Note over P: Prompt Structure
+        P->>P: add_system_prompt()
+        P->>P: add_conversation_context()
+        P->>P: add_estimation_format()
+        P->>P: add_confidence_requirements()
+    end
+
+    P->>+CLIENT: create_chat_completion with model=gpt-4o-mini, temperature=0.3, max_tokens=500
+
+    CLIENT->>+API: POST /v1/chat/completions request
+
+    Note over API: OpenAI Processing
+    API->>API: analyze_conversation_complexity()
+    API->>API: estimate_manual_completion_time()
+    API->>API: calculate_confidence_metrics()
+
+    API-->>-CLIENT: OpenAI response with choices and usage data
+
+    CLIENT-->>-P: OpenAI Response
+
+    Note over P: Parse and validate response
+    P->>PARSER: parse_llm_response(raw_response)
+
+    rect rgb(248, 255, 248)
+        Note over PARSER: Response Validation
+        PARSER->>PARSER: extract_json_content()
+        PARSER->>PARSER: validate_time_estimates()
+        PARSER->>PARSER: validate_confidence_level()
+        PARSER->>PARSER: validate_reasoning()
+    end
+
+    alt Valid response
+        PARSER-->>P: TimeEstimate with low=15, most_likely=25, high=40, confidence=82, reasoning
+
+        Note over P: Cache successful result
+        P->>CACHE: cache_estimate(summary_hash, estimate, ttl=24h)
+
+        Note over P: Track API usage
+        P->>P: increment_api_call_count()
+        P->>P: track_api_cost(tokens_used)
+
+    else Invalid/malformed response
+        PARSER-->>P: parsing_error
+
+        Note over P: Fallback estimation
+        P->>P: use_fallback_estimate(conversation_length)
+        P->>P: log_llm_parsing_error()
+    end
+
+    rect rgb(255, 240, 240)
+        Note over P,CACHE: Error Handling
+        alt OpenAI API error (429 - Rate limit)
+            API-->>CLIENT: HTTP 429
+            CLIENT-->>P: RateLimitError
+            P->>P: exponential_backoff_retry()
+
+        else OpenAI API error (500 - Server error)
+            API-->>CLIENT: HTTP 500
+            CLIENT-->>P: ServerError
+            P->>P: retry_with_backoff(max_retries=3)
+
+        else OpenAI API timeout
+            API-->>CLIENT: Timeout
+            CLIENT-->>P: TimeoutError
+            P->>P: use_conservative_fallback()
+
+        else Network connectivity issue
+            CLIENT-->>P: NetworkError
+            P->>P: queue_for_later_retry()
+        end
+    end
+
+    Note over P: Return processed result
+    P->>P: finalize_time_estimate()

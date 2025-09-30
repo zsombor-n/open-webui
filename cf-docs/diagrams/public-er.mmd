@@ -1,0 +1,277 @@
+erDiagram
+    alembic_version {
+        varchar(32) version_num
+    }
+
+    auth {
+        varchar(255) id PK
+        varchar(255) email
+        text password
+        boolean active
+    }
+
+    channel {
+        text id PK
+        text user_id FK
+        text name
+        text description
+        json data
+        json meta
+        json access_control
+        bigint created_at
+        bigint updated_at
+        text type
+    }
+
+    channel_member {
+        text id PK
+        text channel_id FK
+        text user_id FK
+        bigint created_at
+    }
+
+    chat {
+        varchar(255) id PK
+        varchar(255) user_id FK
+        text title
+        varchar(255) share_id
+        boolean archived
+        bigint created_at
+        bigint updated_at
+        json chat
+        boolean pinned
+        json meta
+        text folder_id FK
+    }
+
+    chatidtag {
+        varchar(255) id PK
+        varchar(255) tag_name
+        varchar(255) chat_id FK
+        varchar(255) user_id FK
+        bigint timestamp
+    }
+
+    config {
+        integer id PK
+        json data
+        integer version
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    document {
+        integer id PK
+        varchar(255) collection_name
+        varchar(255) name
+        text title
+        text filename
+        text content
+        varchar(255) user_id FK
+        bigint timestamp
+    }
+
+    feedback {
+        text id PK
+        text user_id FK
+        bigint version
+        text type
+        json data
+        json meta
+        json snapshot
+        bigint created_at
+        bigint updated_at
+    }
+
+    file {
+        text id PK
+        text user_id FK
+        text filename
+        json meta
+        bigint created_at
+        text hash
+        json data
+        bigint updated_at
+        text path
+        json access_control
+    }
+
+    folder {
+        text id PK
+        text user_id FK
+        text parent_id
+        text name
+        json items
+        json meta
+        boolean is_expanded
+        bigint created_at
+        bigint updated_at
+        json data
+    }
+
+    function {
+        text id PK
+        text user_id FK
+        text name
+        text type
+        text content
+        text meta
+        bigint created_at
+        bigint updated_at
+        text valves
+        boolean is_active
+        boolean is_global
+    }
+
+    group {
+        text id PK
+        text user_id FK
+        text name
+        text description
+        json data
+        json meta
+        json permissions
+        json user_ids
+        bigint created_at
+        bigint updated_at
+    }
+
+    knowledge {
+        text id PK
+        text user_id FK
+        text name
+        text description
+        json data
+        json meta
+        bigint created_at
+        bigint updated_at
+        json access_control
+    }
+
+    memory {
+        varchar(255) id PK
+        varchar(255) user_id FK
+        text content
+        bigint updated_at
+        bigint created_at
+    }
+
+    message {
+        text id PK
+        text user_id FK
+        text channel_id FK
+        text content
+        json data
+        json meta
+        bigint created_at
+        bigint updated_at
+        text parent_id
+    }
+
+    message_reaction {
+        text id PK
+        text user_id FK
+        text message_id FK
+        text name
+        bigint created_at
+    }
+
+    migratehistory {
+        integer id PK
+        varchar(255) name
+        timestamp migrated_at
+    }
+
+    model {
+        text id PK
+        text user_id FK
+        text base_model_id
+        text name
+        text meta
+        text params
+        bigint created_at
+        bigint updated_at
+        json access_control
+        boolean is_active
+    }
+
+    note_table {
+        text id PK
+        text user_id FK
+        text title
+        json data
+        json meta
+        json access_control
+        bigint created_at
+        bigint updated_at
+    }
+
+    prompt {
+        integer id PK
+        varchar(255) command
+        varchar(255) user_id FK
+        text title
+        text content
+        bigint timestamp
+        json access_control
+    }
+
+    tag {
+        varchar(255) id PK
+        varchar(255) name
+        json meta
+        varchar(255) user_id FK
+    }
+
+    tool {
+        text id PK
+        text user_id FK
+        text name
+        text content
+        text specs
+        text meta
+        bigint created_at
+        bigint updated_at
+        text valves
+        json access_control
+    }
+
+    user {
+        varchar(255) id PK
+        varchar(255) name
+        varchar(255) email
+        varchar(255) role
+        text profile_image_url
+        varchar(255) api_key
+        bigint created_at
+        bigint updated_at
+        bigint last_active_at
+        text settings
+        text info
+        text oauth_sub
+    }
+
+    user ||--o{ channel : "has"
+    channel ||--o{ channel_member : "has"
+    user ||--o{ channel_member : "belongs"
+    user ||--o{ chat : "owns"
+    folder ||--o{ chat : "contains"
+    chat ||--o{ chatidtag : "has"
+    user ||--o{ chatidtag : "tags"
+    user ||--o{ document : "owns"
+    user ||--o{ feedback : "gives"
+    user ||--o{ file : "owns"
+    user ||--o{ folder : "owns"
+    user ||--o{ function : "creates"
+    user ||--o{ group : "manages"
+    user ||--o{ knowledge : "owns"
+    user ||--o{ memory : "has"
+    channel ||--o{ message : "contains"
+    user ||--o{ message : "sends"
+    message ||--o{ message_reaction : "has"
+    user ||--o{ message_reaction : "reacts"
+    user ||--o{ model : "owns"
+    user ||--o{ note_table : "writes"
+    user ||--o{ prompt : "creates"
+    user ||--o{ tag : "creates"
+    user ||--o{ tool : "owns"

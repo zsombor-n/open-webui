@@ -784,6 +784,11 @@ load_oauth_providers()
 
 STATIC_DIR = Path(os.getenv("STATIC_DIR", OPEN_WEBUI_DIR / "static")).resolve()
 
+print(f"DEBUG: FRONTEND_BUILD_DIR = {FRONTEND_BUILD_DIR}")
+print(f"DEBUG: STATIC_DIR = {STATIC_DIR}")
+print(f"DEBUG: Frontend static path = {FRONTEND_BUILD_DIR / 'static'}")
+print(f"DEBUG: Frontend static exists = {(FRONTEND_BUILD_DIR / 'static').exists()}")
+
 try:
     if STATIC_DIR.exists():
         for item in STATIC_DIR.iterdir():
@@ -795,6 +800,7 @@ try:
 except Exception as e:
     pass
 
+print(f"DEBUG: Starting file copy from {FRONTEND_BUILD_DIR / 'static'}")
 for file_path in (FRONTEND_BUILD_DIR / "static").glob("**/*"):
     if file_path.is_file():
         target_path = STATIC_DIR / file_path.relative_to(
@@ -1399,6 +1405,24 @@ ENABLE_NOTES = PersistentConfig(
     "ENABLE_NOTES",
     "notes.enable",
     os.environ.get("ENABLE_NOTES", "True").lower() == "true",
+)
+
+CF_ANALYTICS = PersistentConfig(
+    "CF_ANALYTICS",
+    "features.analytics",
+    os.environ.get("CF_ANALYTICS", "False").lower() == "true",
+)
+
+CF_USER_BREAKDOWN = PersistentConfig(
+    "CF_USER_BREAKDOWN",
+    "features.analytics.user_breakdown",
+    os.environ.get("CF_USER_BREAKDOWN", "False").lower() == "true",
+)
+
+CF_TOP_CHATS = PersistentConfig(
+    "CF_TOP_CHATS",
+    "features.analytics.top_chats",
+    os.environ.get("CF_TOP_CHATS", "False").lower() == "true",
 )
 
 ENABLE_EVALUATION_ARENA_MODELS = PersistentConfig(
@@ -3487,4 +3511,79 @@ LDAP_ATTRIBUTE_FOR_GROUPS = PersistentConfig(
     "LDAP_ATTRIBUTE_FOR_GROUPS",
     "ldap.server.attribute_for_groups",
     os.environ.get("LDAP_ATTRIBUTE_FOR_GROUPS", "memberOf"),
+)
+
+####################################
+# ANALYTICS_API
+####################################
+
+# Enable/disable analytics processing
+ENABLE_ANALYTICS_PROCESSING = PersistentConfig(
+    "ENABLE_ANALYTICS_PROCESSING",
+    "analytics.enable",
+    os.environ.get("ENABLE_ANALYTICS_PROCESSING", "True").lower() == "true",
+)
+
+# OpenAI API configuration for analytics
+ANALYTICS_OPENAI_API_KEY = PersistentConfig(
+    "ANALYTICS_OPENAI_API_KEY",
+    "analytics.openai_api_key",
+    os.environ.get("ANALYTICS_OPENAI_API_KEY", OPENAI_API_KEY),
+)
+
+ANALYTICS_OPENAI_API_BASE_URL = PersistentConfig(
+    "ANALYTICS_OPENAI_API_BASE_URL",
+    "analytics.openai_api_base_url",
+    os.environ.get("ANALYTICS_OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
+)
+
+# Analytics processing configuration
+ANALYTICS_MODEL = PersistentConfig(
+    "ANALYTICS_MODEL",
+    "analytics.model",
+    os.environ.get("ANALYTICS_MODEL", "gpt-5-mini"),
+)
+
+ANALYTICS_TEMPERATURE = PersistentConfig(
+    "ANALYTICS_TEMPERATURE",
+    "analytics.temperature",
+    float(os.environ.get("ANALYTICS_TEMPERATURE", "0.3")),
+)
+
+ANALYTICS_MAX_TOKENS = PersistentConfig(
+    "ANALYTICS_MAX_TOKENS",
+    "analytics.max_tokens",
+    int(os.environ.get("ANALYTICS_MAX_TOKENS", "500")),
+)
+
+ANALYTICS_IDLE_THRESHOLD_MINUTES = PersistentConfig(
+    "ANALYTICS_IDLE_THRESHOLD_MINUTES",
+    "analytics.idle_threshold_minutes",
+    int(os.environ.get("ANALYTICS_IDLE_THRESHOLD_MINUTES", "10")),
+)
+
+# Schedule configuration
+ANALYTICS_DAILY_PROCESSING_ENABLED = PersistentConfig(
+    "ANALYTICS_DAILY_PROCESSING_ENABLED",
+    "analytics.daily_processing.enabled",
+    os.environ.get("ANALYTICS_DAILY_PROCESSING_ENABLED", "True").lower() == "true",
+)
+
+ANALYTICS_PROCESSING_TIMEZONE = PersistentConfig(
+    "ANALYTICS_PROCESSING_TIMEZONE",
+    "analytics.processing_timezone",
+    os.environ.get("ANALYTICS_PROCESSING_TIMEZONE", "Europe/Budapest"),
+)
+
+# Processing limits and safety
+ANALYTICS_MAX_CONVERSATIONS_PER_RUN = PersistentConfig(
+    "ANALYTICS_MAX_CONVERSATIONS_PER_RUN",
+    "analytics.max_conversations_per_run",
+    int(os.environ.get("ANALYTICS_MAX_CONVERSATIONS_PER_RUN", "1000")),
+)
+
+ANALYTICS_MAX_COST_PER_RUN_USD = PersistentConfig(
+    "ANALYTICS_MAX_COST_PER_RUN_USD",
+    "analytics.max_cost_per_run_usd",
+    float(os.environ.get("ANALYTICS_MAX_COST_PER_RUN_USD", "5.0")),
 )

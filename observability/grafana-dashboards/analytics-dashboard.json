@@ -1,0 +1,153 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "OpenWebUI Analytics Dashboard",
+    "tags": ["openwebui", "analytics"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Analytics API Requests",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(openwebui_analytics_requests_total[5m])",
+            "legendFormat": "{{operation}} - {{status}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "Analytics Response Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(openwebui_http_server_duration_seconds_sum{route=~\".*analytics.*\"}[5m]) / rate(openwebui_http_server_duration_seconds_count{route=~\".*analytics.*\"}[5m])",
+            "legendFormat": "{{route}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 6,
+          "y": 0
+        }
+      },
+      {
+        "id": 3,
+        "title": "Cache Hit Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(openwebui_analytics_cache_operations_total{result=\"hit\"}[5m]) / rate(openwebui_analytics_cache_operations_total[5m]) * 100",
+            "legendFormat": "Cache Hit Rate %"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 18,
+          "y": 0
+        }
+      },
+      {
+        "id": 4,
+        "title": "Error Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(openwebui_analytics_errors_total[5m])",
+            "legendFormat": "{{operation}} - {{error_type}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        }
+      },
+      {
+        "id": 5,
+        "title": "Database Query Performance",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(openwebui_analytics_database_query_duration_seconds_sum[5m]) / rate(openwebui_analytics_database_query_duration_seconds_count[5m])",
+            "legendFormat": "{{query_type}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 8
+        }
+      },
+      {
+        "id": 6,
+        "title": "Active Users",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "openwebui_webui_users_active",
+            "legendFormat": "Active Users"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 0,
+          "y": 16
+        }
+      },
+      {
+        "id": 7,
+        "title": "Total Users",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "openwebui_webui_users_total",
+            "legendFormat": "Total Users"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 6,
+          "y": 16
+        }
+      },
+      {
+        "id": 8,
+        "title": "Analytics Logs",
+        "type": "logs",
+        "targets": [
+          {
+            "expr": "{service_name=\"open-webui-analytics\"} |= \"analytics\"",
+            "datasource": "Loki"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 20
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "30s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

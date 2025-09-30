@@ -1,0 +1,255 @@
+classDiagram
+    direction BT
+    class alembic_version {
+        varchar(32) version_num
+    }
+    class auth {
+        varchar(255) id
+        varchar(255) email
+        text password
+        boolean active
+    }
+    class channel {
+        text user_id
+        text name
+        text description
+        json data
+        json meta
+        json access_control
+        bigint created_at
+        bigint updated_at
+        text type
+        text id
+    }
+    class channel_member {
+        text channel_id
+        text user_id
+        bigint created_at
+        text id
+    }
+    class chat {
+        varchar(255) id
+        varchar(255) user_id
+        text title
+        varchar(255) share_id
+        boolean archived
+        bigint created_at
+        bigint updated_at
+        json chat
+        boolean pinned
+        json meta
+        text folder_id
+    }
+    class chatidtag {
+        varchar(255) id
+        varchar(255) tag_name
+        varchar(255) chat_id
+        varchar(255) user_id
+        bigint timestamp
+    }
+    class config {
+        json data
+        integer version
+        timestamp created_at
+        timestamp updated_at
+        integer id
+    }
+    class document {
+        varchar(255) collection_name
+        varchar(255) name
+        text title
+        text filename
+        text content
+        varchar(255) user_id
+        bigint timestamp
+        integer id
+    }
+    class feedback {
+        text user_id
+        bigint version
+        text type
+        json data
+        json meta
+        json snapshot
+        bigint created_at
+        bigint updated_at
+        text id
+    }
+    class file {
+        text id
+        text user_id
+        text filename
+        json meta
+        bigint created_at
+        text hash
+        json data
+        bigint updated_at
+        text path
+        json access_control
+    }
+    class folder {
+        text parent_id
+        text name
+        json items
+        json meta
+        boolean is_expanded
+        bigint created_at
+        bigint updated_at
+        json data
+        text id
+        text user_id
+    }
+    class function {
+        text id
+        text user_id
+        text name
+        text type
+        text content
+        text meta
+        bigint created_at
+        bigint updated_at
+        text valves
+        boolean is_active
+        boolean is_global
+    }
+    class group {
+        text user_id
+        text name
+        text description
+        json data
+        json meta
+        json permissions
+        json user_ids
+        bigint created_at
+        bigint updated_at
+        text id
+    }
+    class knowledge {
+        text user_id
+        text name
+        text description
+        json data
+        json meta
+        bigint created_at
+        bigint updated_at
+        json access_control
+        text id
+    }
+    class memory {
+        varchar(255) id
+        varchar(255) user_id
+        text content
+        bigint updated_at
+        bigint created_at
+    }
+    class message {
+        text user_id
+        text channel_id
+        text content
+        json data
+        json meta
+        bigint created_at
+        bigint updated_at
+        text parent_id
+        text id
+    }
+    class message_reaction {
+        text user_id
+        text message_id
+        text name
+        bigint created_at
+        text id
+    }
+    class migratehistory {
+        varchar(255) name
+        timestamp migrated_at
+        integer id
+    }
+    class model {
+        text id
+        text user_id
+        text base_model_id
+        text name
+        text meta
+        text params
+        bigint created_at
+        bigint updated_at
+        json access_control
+        boolean is_active
+    }
+    class note_table {
+        text user_id
+        text title
+        json data
+        json meta
+        json access_control
+        bigint created_at
+        bigint updated_at
+        text id
+    }
+    class prompt {
+        varchar(255) command
+        varchar(255) user_id
+        text title
+        text content
+        bigint timestamp
+        json access_control
+        integer id
+    }
+    class tag {
+        varchar(255) name
+        json meta
+        varchar(255) id
+        varchar(255) user_id
+    }
+    class tool {
+        text id
+        text user_id
+        text name
+        text content
+        text specs
+        text meta
+        bigint created_at
+        bigint updated_at
+        text valves
+        json access_control
+    }
+    class user {
+        varchar(255) id
+        varchar(255) name
+        varchar(255) email
+        varchar(255) role
+        text profile_image_url
+        varchar(255) api_key
+        bigint created_at
+        bigint updated_at
+        bigint last_active_at
+        text settings
+        text info
+        text oauth_sub
+    }
+
+    channel --> user : user_id
+    channel_member --> channel : channel_id
+    channel_member --> user : user_id
+    chat --> folder : folder_id
+    chat --> user : user_id
+    chatidtag --> chat : chat_id
+    chatidtag --> user : user_id
+    document --> user : user_id
+    feedback --> user : user_id
+    file --> user : user_id
+    folder --> user : user_id
+    function --> user : user_id
+    group --> user : user_id
+    knowledge --> user : user_id
+    memory --> user : user_id
+    message --> channel : channel_id
+    message --> user : user_id
+    message_reaction --> message : message_id
+    message_reaction --> user : user_id
+    model --> user : user_id
+    note_table --> user : user_id
+    prompt --> user : user_id
+    tag --> user : user_id
+    tool --> user : user_id

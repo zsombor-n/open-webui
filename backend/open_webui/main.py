@@ -62,6 +62,7 @@ from open_webui.socket.main import (
     get_active_user_ids,
 )
 from open_webui.routers import (
+    analytics,
     audio,
     images,
     ollama,
@@ -97,6 +98,7 @@ from open_webui.routers.retrieval import (
 )
 
 from open_webui.internal.db import Session, engine
+from open_webui.internal.cogniforce_db import initialize_cogniforce_database
 
 from open_webui.models.functions import Functions
 from open_webui.models.models import Models
@@ -330,6 +332,9 @@ from open_webui.config import (
     API_KEY_ALLOWED_ENDPOINTS,
     ENABLE_CHANNELS,
     ENABLE_NOTES,
+    CF_ANALYTICS,
+    CF_USER_BREAKDOWN,
+    CF_TOP_CHATS,
     ENABLE_COMMUNITY_SHARING,
     ENABLE_MESSAGE_RATING,
     ENABLE_USER_WEBHOOKS,
@@ -508,21 +513,26 @@ class SPAStaticFiles(StaticFiles):
                 raise ex
 
 
-print(
-    rf"""
- ██████╗ ██████╗ ███████╗███╗   ██╗    ██╗    ██╗███████╗██████╗ ██╗   ██╗██╗
-██╔═══██╗██╔══██╗██╔════╝████╗  ██║    ██║    ██║██╔════╝██╔══██╗██║   ██║██║
-██║   ██║██████╔╝█████╗  ██╔██╗ ██║    ██║ █╗ ██║█████╗  ██████╔╝██║   ██║██║
-██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║    ██║███╗██║██╔══╝  ██╔══██╗██║   ██║██║
-╚██████╔╝██║     ███████╗██║ ╚████║    ╚███╔███╔╝███████╗██████╔╝╚██████╔╝██║
- ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝     ╚══╝╚══╝ ╚══════╝╚═════╝  ╚═════╝ ╚═╝
+# Commented out to avoid Windows cp1252 encoding issues
+# print(
+#     rf"""
+#  ██████╗ ██████╗ ███████╗███╗   ██╗    ██╗    ██╗███████╗██████╗ ██╗   ██╗██╗
+# ██╔═══██╗██╔══██╗██╔════╝████╗  ██║    ██║    ██║██╔════╝██╔══██╗██║   ██║██║
+# ██║   ██║██████╔╝█████╗  ██╔██╗ ██║    ██║ █╗ ██║█████╗  ██████╔╝██║   ██║██║
+# ██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║    ██║███╗██║██╔══╝  ██╔══██╗██║   ██║██║
+# ╚██████╔╝██║     ███████╗██║ ╚████║    ╚███╔███╔╝███████╗██████╔╝╚██████╔╝██║
+#  ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝     ╚══╝╚══╝ ╚══════╝╚═════╝  ╚═════╝ ╚═╝
+#
+#
+# v{VERSION} - building the best AI user interface.
+# {f"Commit: {WEBUI_BUILD_HASH}" if WEBUI_BUILD_HASH != "dev-build" else ""}
+# https://github.com/open-webui/open-webui
+# """
+# )
 
-
-v{VERSION} - building the best AI user interface.
-{f"Commit: {WEBUI_BUILD_HASH}" if WEBUI_BUILD_HASH != "dev-build" else ""}
-https://github.com/open-webui/open-webui
-"""
-)
+print(f"Open WebUI v{VERSION} - building the best AI user interface.")
+print(f"Commit: {WEBUI_BUILD_HASH}" if WEBUI_BUILD_HASH != "dev-build" else "")
+print("https://github.com/open-webui/open-webui")
 
 
 @asynccontextmanager
@@ -535,6 +545,15 @@ async def lifespan(app: FastAPI):
 
     if LICENSE_KEY:
         get_license_data(app, LICENSE_KEY)
+
+    # Initialize Cogniforce database (dual-database setup)
+    log.info("Initializing Cogniforce database...")
+    try:
+        initialize_cogniforce_database()
+        log.info("Cogniforce database initialization completed successfully")
+    except Exception as e:
+        log.error(f"Failed to initialize Cogniforce database: {e}")
+        log.warning("Continuing without Cogniforce database features")
 
     # This should be blocking (sync) so functions are not deactivated on first /get_models calls
     # when the first user lands on the / route.
@@ -582,7 +601,42 @@ async def lifespan(app: FastAPI):
             None,
         )
 
+    # Initialize Analytics Scheduler (if feature enabled)
+    from open_webui.config import CF_ANALYTICS
+
+    if CF_ANALYTICS.value:
+        log.info("Initializing Analytics Scheduler...")
+        try:
+            from open_webui.services.analytics_scheduler import AnalyticsScheduler
+            from open_webui.config import (
+                ANALYTICS_OPENAI_API_KEY,
+                ANALYTICS_DAILY_PROCESSING_ENABLED
+            )
+
+            analytics_scheduler = AnalyticsScheduler(
+                openai_api_key=ANALYTICS_OPENAI_API_KEY.value,
+                enabled=ANALYTICS_DAILY_PROCESSING_ENABLED.value
+            )
+
+            await analytics_scheduler.start()
+            app.state.analytics_scheduler = analytics_scheduler
+            log.info("Analytics Scheduler initialized successfully")
+        except Exception as e:
+            log.error(f"Failed to initialize Analytics Scheduler: {e}")
+            log.warning("Continuing without scheduled analytics processing")
+    else:
+        log.info("Analytics feature is disabled (CF_ANALYTICS=false). Skipping scheduler initialization.")
+
     yield
+
+    # Shutdown Analytics Scheduler
+    if hasattr(app.state, "analytics_scheduler"):
+        log.info("Shutting down Analytics Scheduler...")
+        try:
+            await app.state.analytics_scheduler.stop()
+            log.info("Analytics Scheduler stopped successfully")
+        except Exception as e:
+            log.error(f"Error shutting down Analytics Scheduler: {e}")
 
     if hasattr(app.state, "redis_task_command_listener"):
         app.state.redis_task_command_listener.cancel()
@@ -724,6 +778,9 @@ app.state.config.MODEL_ORDER_LIST = MODEL_ORDER_LIST
 
 app.state.config.ENABLE_CHANNELS = ENABLE_CHANNELS
 app.state.config.ENABLE_NOTES = ENABLE_NOTES
+app.state.config.CF_ANALYTICS = CF_ANALYTICS
+app.state.config.CF_USER_BREAKDOWN = CF_USER_BREAKDOWN
+app.state.config.CF_TOP_CHATS = CF_TOP_CHATS
 app.state.config.ENABLE_COMMUNITY_SHARING = ENABLE_COMMUNITY_SHARING
 app.state.config.ENABLE_MESSAGE_RATING = ENABLE_MESSAGE_RATING
 app.state.config.ENABLE_USER_WEBHOOKS = ENABLE_USER_WEBHOOKS
@@ -1240,6 +1297,10 @@ app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
 app.include_router(auths.router, prefix="/api/v1/auths", tags=["auths"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 
+# Register analytics router only if feature is enabled
+if CF_ANALYTICS:
+    app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
+
 
 app.include_router(channels.router, prefix="/api/v1/channels", tags=["channels"])
 app.include_router(chats.router, prefix="/api/v1/chats", tags=["chats"])
@@ -1686,6 +1747,9 @@ async def get_app_config(request: Request):
                     "enable_direct_connections": app.state.config.ENABLE_DIRECT_CONNECTIONS,
                     "enable_channels": app.state.config.ENABLE_CHANNELS,
                     "enable_notes": app.state.config.ENABLE_NOTES,
+                    "enable_analytics": app.state.config.CF_ANALYTICS,
+                    "enable_user_breakdown": app.state.config.CF_USER_BREAKDOWN,
+                    "enable_top_chats": app.state.config.CF_TOP_CHATS,
                     "enable_web_search": app.state.config.ENABLE_WEB_SEARCH,
                     "enable_code_execution": app.state.config.ENABLE_CODE_EXECUTION,
                     "enable_code_interpreter": app.state.config.ENABLE_CODE_INTERPRETER,
