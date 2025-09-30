@@ -18,7 +18,13 @@
       "Bash(move:*)",
       "Bash(echo $OPEN_WEBUI_ENV)",
       "Bash(psql:*)",
-      "Bash(docker-compose:*)"
+      "Bash(docker-compose:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(tail:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout 30 uv run open-webui dev)"
     ],
     "deny": [],
     "ask": []

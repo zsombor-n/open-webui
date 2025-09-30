@@ -19,12 +19,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create conversation_insights table
+    # Create chat_insights table
     op.create_table(
-        'conversation_insights',
+        'chat_insights',
         sa.Column('id', sa.String(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
-        sa.Column('conversation_id', sa.String(), nullable=False),
+        sa.Column('chat_id', sa.String(), nullable=False),
         sa.Column('message_count', sa.Integer(), default=0),
         sa.Column('avg_response_time', sa.Float(), nullable=True),
         sa.Column('sentiment_score', sa.Float(), nullable=True),
@@ -41,7 +41,7 @@ def upgrade() -> None:
         sa.Column('id', sa.String(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('daily_active_days', sa.Integer(), default=0),
-        sa.Column('total_conversations', sa.Integer(), default=0),
+        sa.Column('total_chats', sa.Integer(), default=0),
         sa.Column('total_messages', sa.Integer(), default=0),
         sa.Column('avg_session_duration', sa.Float(), nullable=True),
         sa.Column('last_activity_at', sa.BigInteger(), nullable=True),
@@ -51,17 +51,17 @@ def upgrade() -> None:
     )
 
     # Create indexes for better performance
-    op.create_index('idx_conversation_insights_user_id', 'conversation_insights', ['user_id'])
-    op.create_index('idx_conversation_insights_conversation_id', 'conversation_insights', ['conversation_id'])
+    op.create_index('idx_chat_insights_user_id', 'chat_insights', ['user_id'])
+    op.create_index('idx_chat_insights_chat_id', 'chat_insights', ['chat_id'])
     op.create_index('idx_user_engagement_user_id', 'user_engagement', ['user_id'])
 
 
 def downgrade() -> None:
     # Drop indexes
     op.drop_index('idx_user_engagement_user_id', table_name='user_engagement')
-    op.drop_index('idx_conversation_insights_conversation_id', table_name='conversation_insights')
-    op.drop_index('idx_conversation_insights_user_id', table_name='conversation_insights')
+    op.drop_index('idx_chat_insights_chat_id', table_name='chat_insights')
+    op.drop_index('idx_chat_insights_user_id', table_name='chat_insights')
 
     # Drop tables
     op.drop_table('user_engagement')
-    op.drop_table('conversation_insights')
+    op.drop_table('chat_insights')

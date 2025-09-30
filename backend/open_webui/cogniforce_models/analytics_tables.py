@@ -2,7 +2,7 @@
 Analytics Tables for Cogniforce Database
 
 This module contains SQLAlchemy models for the analytics tables:
-- conversation_analysis: Per-conversation analysis results
+- chat_analysis: Per-chat analysis results
 - daily_aggregates: Pre-computed daily statistics
 - processing_log: Processing runs and system health tracking
 
@@ -10,9 +10,9 @@ These tables are created in the cogniforce database alongside the existing
 conversation_insights and user_engagement tables.
 """
 
+import math
 import time
 import uuid
-import hashlib
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date, timedelta
@@ -20,11 +20,12 @@ from functools import wraps
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     Column, String, Integer, Float, Text, Date, DateTime,
-    CheckConstraint, UniqueConstraint, Index, text
+    CheckConstraint, UniqueConstraint, Index, func, cast
 )
 from sqlalchemy.dialects.postgresql import UUID
 from open_webui.internal.cogniforce_db import CogniforceBase, get_cogniforce_db
 from open_webui.internal.db import JSONField, get_db
+from open_webui.models.users import User
 
 # Import simplified OpenTelemetry integration
 from .analytics_otel import track_analytics_operation, track_cache_operation, DatabaseOperationTracker, log_analytics_event
@@ -94,15 +95,15 @@ def log_performance(operation_name: str):
 # SQLAlchemy Models
 ####################
 
-class ConversationAnalysis(CogniforceBase):
-    """Stores per-conversation analysis results for time savings analytics."""
-    __tablename__ = "conversation_analysis"
+class ChatAnalysis(CogniforceBase):
+    """Stores per-chat analysis results for time savings analytics."""
+    __tablename__ = "chat_analysis"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    # Source conversation identification
-    conversation_id = Column(String(255), nullable=False, unique=True)
-    user_id_hash = Column(String(64), nullable=False)  # SHA-256 hash for privacy
+    # Source chat identification
+    chat_id = Column(String(255), nullable=False, unique=True)
+    user_id = Column(String(255), nullable=False)  # OpenWebUI user ID
 
     # Timing analysis
     first_message_at = Column(DateTime(timezone=True), nullable=False)
@@ -122,11 +123,12 @@ class ConversationAnalysis(CogniforceBase):
 
     # Metadata
     message_count = Column(Integer, nullable=False)
+    chat_date = Column(Date, nullable=False)  # Date when chat actually occurred (from created_at)
     processed_at = Column(DateTime(timezone=True), default=lambda: datetime.now())
     processing_version = Column(String(20), default="1.0")
 
     # Analysis data
-    conversation_summary = Column(Text, nullable=True)  # Redacted summary sent to LLM
+    chat_summary = Column(Text, nullable=True)  # Redacted summary sent to LLM
     llm_response = Column(JSONField, nullable=True)  # Full LLM response for debugging
 
     __table_args__ = (
@@ -146,8 +148,8 @@ class ConversationAnalysis(CogniforceBase):
             'manual_time_most_likely <= manual_time_high',
             name='valid_estimates'
         ),
-        Index('idx_conversation_analysis_user_date', 'user_id_hash', 'processed_at'),
-        Index('idx_conversation_analysis_processed_at', 'processed_at'),
+        Index('idx_chat_analysis_user_date', 'user_id', 'processed_at'),
+        Index('idx_chat_analysis_processed_at', 'processed_at'),
     )
 
 
@@ -159,17 +161,17 @@ class DailyAggregate(CogniforceBase):
 
     # Aggregation period
     analysis_date = Column(Date, nullable=False)
-    user_id_hash = Column(String(64), nullable=True)  # NULL for global aggregates
+    user_id = Column(String(255), nullable=True)  # NULL for global aggregates
 
     # Counts
-    conversation_count = Column(Integer, nullable=False, default=0)
+    chat_count = Column(Integer, nullable=False, default=0)
     message_count = Column(Integer, nullable=False, default=0)
 
     # Time metrics (in minutes)
     total_active_time = Column(Integer, nullable=False, default=0)
     total_manual_time_estimated = Column(Integer, nullable=False, default=0)
     total_time_saved = Column(Integer, nullable=False, default=0)
-    avg_time_saved_per_conversation = Column(Float, nullable=True)
+    avg_time_saved_per_chat = Column(Float, nullable=True)
 
     # Confidence metrics
     avg_confidence_level = Column(Float, nullable=True)
@@ -179,9 +181,9 @@ class DailyAggregate(CogniforceBase):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now())
 
     __table_args__ = (
-        UniqueConstraint('analysis_date', 'user_id_hash', name='unique_daily_aggregate'),
+        UniqueConstraint('analysis_date', 'user_id', name='unique_daily_aggregate'),
         CheckConstraint(
-            'conversation_count >= 0 AND '
+            'chat_count >= 0 AND '
             'message_count >= 0 AND '
             'total_active_time >= 0 AND '
             'total_time_saved >= 0',
@@ -198,15 +200,15 @@ class ProcessingLog(CogniforceBase):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Processing run information
-    run_date = Column(Date, nullable=False)
+    target_date = Column(Date, nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(String(20), nullable=False, default='running')  # running, completed, failed
 
     # Processing statistics
-    conversations_processed = Column(Integer, default=0)
-    conversations_skipped = Column(Integer, default=0)
-    conversations_failed = Column(Integer, default=0)
+    chats_processed = Column(Integer, default=0)
+    chats_skipped = Column(Integer, default=0)
+    chats_failed = Column(Integer, default=0)
 
     # Performance metrics
     total_llm_requests = Column(Integer, default=0)
@@ -220,11 +222,11 @@ class ProcessingLog(CogniforceBase):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now())
 
     __table_args__ = (
-        Index('idx_processing_log_run_date', 'run_date'),
+        Index('idx_processing_log_target_date', 'target_date'),
         CheckConstraint(
-            'conversations_processed >= 0 AND '
-            'conversations_skipped >= 0 AND '
-            'conversations_failed >= 0',
+            'chats_processed >= 0 AND '
+            'chats_skipped >= 0 AND '
+            'chats_failed >= 0',
             name='positive_processing_counts'
         ),
     )
@@ -234,13 +236,13 @@ class ProcessingLog(CogniforceBase):
 # Pydantic Models
 ####################
 
-class ConversationAnalysisModel(BaseModel):
-    """Pydantic model for conversation analysis data."""
+class ChatAnalysisModel(BaseModel):
+    """Pydantic model for chat analysis data."""
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    conversation_id: str
-    user_id_hash: str
+    chat_id: str
+    user_id: str
     first_message_at: str  # ISO datetime string
     last_message_at: str   # ISO datetime string
     total_duration_minutes: int
@@ -254,7 +256,7 @@ class ConversationAnalysisModel(BaseModel):
     message_count: int
     processed_at: str      # ISO datetime string
     processing_version: str
-    conversation_summary: Optional[str] = None
+    chat_summary: Optional[str] = None
     llm_response: Optional[dict] = None
 
 
@@ -264,13 +266,13 @@ class DailyAggregateModel(BaseModel):
 
     id: uuid.UUID
     analysis_date: str     # ISO date string
-    user_id_hash: Optional[str] = None
-    conversation_count: int
+    user_id: Optional[str] = None
+    chat_count: int
     message_count: int
     total_active_time: int
     total_manual_time_estimated: int
     total_time_saved: int
-    avg_time_saved_per_conversation: Optional[float] = None
+    avg_time_saved_per_chat: Optional[float] = None
     avg_confidence_level: Optional[float] = None
     created_at: str        # ISO datetime string
     updated_at: str        # ISO datetime string
@@ -285,9 +287,9 @@ class ProcessingLogModel(BaseModel):
     started_at: str        # ISO datetime string
     completed_at: Optional[str] = None  # ISO datetime string
     status: str
-    conversations_processed: int
-    conversations_skipped: int
-    conversations_failed: int
+    chats_processed: int
+    chats_skipped: int
+    chats_failed: int
     total_llm_requests: int
     total_llm_cost_usd: float
     processing_duration_seconds: Optional[int] = None
@@ -302,19 +304,19 @@ class ProcessingLogModel(BaseModel):
 
 class AnalyticsSummaryModel(BaseModel):
     """Summary analytics for dashboard display."""
-    total_conversations: int
+    total_chats: int
     total_time_saved: int
-    avg_time_saved_per_conversation: float
+    avg_time_saved_per_chat: float
     avg_confidence_level: float
     date_range: str
 
 
 class UserBreakdownModel(BaseModel):
     """Per-user analytics breakdown."""
-    user_id_hash: str
-    conversation_count: int
+    user_id: str
+    chat_count: int
     total_time_saved: int
-    avg_time_saved_per_conversation: float
+    avg_time_saved_per_chat: float
     avg_confidence_level: float
 
 
@@ -323,9 +325,9 @@ class UserBreakdownModel(BaseModel):
 ####################
 
 class AnalyticsSummary(BaseModel):
-    total_conversations: int = Field(alias="totalConversations")
+    total_chats: int = Field(alias="totalChats")
     total_time_saved: int = Field(alias="totalTimeSaved")  # minutes
-    avg_time_saved_per_conversation: float = Field(alias="avgTimeSavedPerConversation")
+    avg_time_saved_per_chat: float = Field(alias="avgTimeSavedPerChat")
     confidence_level: float = Field(alias="confidenceLevel")
 
     class Config:
@@ -333,8 +335,8 @@ class AnalyticsSummary(BaseModel):
 
 
 class DailyTrendItem(BaseModel):
-    date: str
-    conversations: int
+    date: str = Field(alias="date")
+    chats: int = Field(alias="chats")
     time_saved: int = Field(alias="timeSaved")  # minutes
     avg_confidence: float = Field(alias="avgConfidence")
 
@@ -343,9 +345,8 @@ class DailyTrendItem(BaseModel):
 
 
 class UserBreakdownItem(BaseModel):
-    user_id_hash: str = Field(alias="userIdHash")
     user_name: str = Field(alias="userName")
-    conversations: int
+    chats: int = Field(alias="chats")
     time_saved: int = Field(alias="timeSaved")  # minutes
     avg_confidence: float = Field(alias="avgConfidence")
 
@@ -353,23 +354,102 @@ class UserBreakdownItem(BaseModel):
         populate_by_name = True
 
 
-class ConversationItem(BaseModel):
-    id: str
+class ChatItem(BaseModel):
+    id: str = Field(alias="id")
     user_name: str = Field(alias="userName")
     created_at: str = Field(alias="createdAt")
     time_saved: int = Field(alias="timeSaved")  # minutes
-    confidence: int
-    summary: str
+    confidence: int = Field(alias="confidence")
+    topic: str = Field(alias="topic")
+    message_count: int = Field(alias="messageCount")
+    user_message_count: int = Field(alias="userMessageCount")
+    assistant_message_count: int = Field(alias="assistantMessageCount")
+    summary: Optional[str] = Field(default=None, alias="summary")  # Only included if full_summary=True
+
+    class Config:
+        populate_by_name = True
+
+
+class SystemInfo(BaseModel):
+    timezone: str = Field(alias="timezone")
+    idle_threshold_minutes: int = Field(alias="idleThresholdMinutes")
+    processing_version: str = Field(alias="processingVersion")
+    database_status: str = Field(alias="databaseStatus")
+    llm_integration: str = Field(alias="llmIntegration")
 
     class Config:
         populate_by_name = True
 
 
 class HealthStatus(BaseModel):
-    status: str
+    status: str = Field(alias="status")
     last_processing_run: Optional[str] = Field(alias="lastProcessingRun")
     next_scheduled_run: str = Field(alias="nextScheduledRun")
-    system_info: Dict[str, Any] = Field(alias="systemInfo")
+    system_info: SystemInfo = Field(alias="systemInfo")
+
+    class Config:
+        populate_by_name = True
+
+
+class ProcessingTriggerResponse(BaseModel):
+    status: str = Field(alias="status")
+    target_date: str = Field(alias="targetDate")
+    message: str = Field(alias="message")
+    processing_log_id: Optional[str] = Field(alias="processingLogId")
+    chats_processed: int = Field(alias="chatsProcessed")
+    chats_failed: int = Field(alias="chatsFailed")
+    duration_seconds: float = Field(alias="durationSeconds")
+    total_cost_usd: float = Field(alias="totalCostUsd")
+    model_used: str = Field(alias="modelUsed")
+
+    class Config:
+        populate_by_name = True
+
+
+class ChatAnalysisResult(BaseModel):
+    analysis_id: str = Field(alias="analysisId")
+    chat_id: str = Field(alias="chatId")
+    chat_date: date = Field(alias="chatDate")
+    user_id: str = Field(alias="userId")
+    time_saved_minutes: int = Field(alias="timeSavedMinutes")
+    active_duration_minutes: int = Field(alias="activeDurationMinutes")
+    manual_time_most_likely: int = Field(alias="manualTimeMostLikely")
+    message_count: int = Field(alias="messageCount")
+    confidence_level: int = Field(alias="confidenceLevel")
+    llm_cost: float = Field(alias="llmCost")
+
+    class Config:
+        populate_by_name = True
+
+
+class TimeMetrics(BaseModel):
+    first_message_at: datetime = Field(alias="firstMessageAt")
+    last_message_at: datetime = Field(alias="lastMessageAt")
+    total_duration_minutes: int = Field(alias="totalDurationMinutes")
+    active_duration_minutes: int = Field(alias="activeDurationMinutes")
+    idle_time_minutes: int = Field(alias="idleTimeMinutes")
+
+    class Config:
+        populate_by_name = True
+
+
+class TimeEstimates(BaseModel):
+    low: int = Field(alias="low")
+    most_likely: int = Field(alias="mostLikely")
+    high: int = Field(alias="high")
+    confidence: int = Field(alias="confidence")
+
+    class Config:
+        populate_by_name = True
+
+
+class ProcessingLogResult(BaseModel):
+    processing_log_id: str = Field(alias="processingLogId")
+    status: str = Field(alias="status")
+    duration_seconds: float = Field(alias="durationSeconds")
+    chats_processed: int = Field(alias="chatsProcessed")
+    chats_failed: int = Field(alias="chatsFailed")
+    total_cost_usd: float = Field(alias="totalCostUsd")
 
     class Config:
         populate_by_name = True
@@ -382,214 +462,315 @@ class HealthStatus(BaseModel):
 class AnalyticsTable:
     """Analytics data access layer following OpenWebUI Table class pattern."""
 
-    def _get_user_name_from_hash(self, user_hash: str) -> str:
-        """Map user hash back to real name and email for display."""
+    def _parse_chat_summary(self, raw_summary: str) -> Dict[str, Any]:
+        """
+        Parse structured chat summary into separate fields.
+
+        Expected format:
+        "Chat Analysis Summary:
+
+        Topic: ⚖️ Nixon Ruling and Impeachments
+        Message Count: 10
+        User Messages: 5
+        Assistant Messages: 5
+
+        Content Overview:
+        [actual summary text...]"
+
+        Returns:
+            Dict with topic, message_count, user_message_count, assistant_message_count, content_summary
+        """
+        try:
+            lines = raw_summary.split('\n')
+
+            # Extract structured data with defaults
+            topic = "Untitled Chat"
+            message_count = 0
+            user_message_count = 0
+            assistant_message_count = 0
+            content_summary = None
+
+            # Find the content overview section
+            content_start_idx = None
+            for i, line in enumerate(lines):
+                line = line.strip()
+
+                if line.startswith("Topic:"):
+                    topic = line.replace("Topic:", "").strip()
+                elif line.startswith("Message Count:"):
+                    try:
+                        message_count = int(line.replace("Message Count:", "").strip())
+                    except ValueError:
+                        pass
+                elif line.startswith("User Messages:"):
+                    try:
+                        user_message_count = int(line.replace("User Messages:", "").strip())
+                    except ValueError:
+                        pass
+                elif line.startswith("Assistant Messages:"):
+                    try:
+                        assistant_message_count = int(line.replace("Assistant Messages:", "").strip())
+                    except ValueError:
+                        pass
+                elif line.startswith("Content Overview:"):
+                    content_start_idx = i + 1
+                    break
+
+            # Extract content summary if found
+            if content_start_idx is not None and content_start_idx < len(lines):
+                # Join all remaining lines after "Content Overview:"
+                content_lines = lines[content_start_idx:]
+                content_summary = '\n'.join(content_lines).strip()
+
+            return {
+                'topic': topic,
+                'message_count': message_count,
+                'user_message_count': user_message_count,
+                'assistant_message_count': assistant_message_count,
+                'content_summary': content_summary
+            }
+
+        except Exception as e:
+            log.warning(f"Failed to parse chat summary: {e}")
+            return {
+                'topic': "Parsing Error",
+                'message_count': 0,
+                'user_message_count': 0,
+                'assistant_message_count': 0,
+                'content_summary': raw_summary[:200] + "..." if len(raw_summary) > 200 else raw_summary
+            }
+
+    def _get_user_name_from_id(self, user_id: str) -> str:
+        """Get real user name and email for display using user ID."""
         try:
             log.debug(
-                "Looking up user name from hash",
+                "🔍 Looking up user name from ID",
                 extra={
-                    "user_hash_prefix": user_hash[:8],
+                    "user_id": user_id,
+                    "user_id_type": type(user_id).__name__,
                     "timestamp": datetime.now().isoformat()
                 }
             )
 
-            # Get all users from OpenWebUI database and find matching hash
+            # Get user directly from OpenWebUI database using string ID
             with get_db() as db:
-                result = db.execute(text('SELECT id, email, name FROM "user"'))
-                users = result.fetchall()
+                user = db.query(User.id, User.email, User.name).filter(User.id == user_id).first()
 
-                for user in users:
-                    user_email = user[1]  # email column
-                    user_name = user[2]   # name column
-
-                    # Generate hash for this user's email
-                    email_hash = hashlib.sha256(user_email.encode()).hexdigest()
-
-                    if email_hash == user_hash:
-                        # Return format: "Name (email)"
-                        log.debug(
-                            "User name resolved successfully",
-                            extra={
-                                "user_hash_prefix": user_hash[:8],
-                                "user_name": user_name,
-                                "timestamp": datetime.now().isoformat()
-                            }
-                        )
-                        return f"{user_name} ({user_email})"
-
-                # Fallback for unknown hashes
-                log.warning(
-                    "User hash not found in database",
-                    extra={
-                        "user_hash_prefix": user_hash[:8],
-                        "total_users_checked": len(users),
-                        "timestamp": datetime.now().isoformat()
-                    }
-                )
-                return f"User {user_hash[:8]}"
+                if user:
+                    user_id_val, user_email, user_name = user
+                    # Return format: "Name (email)"
+                    log.debug(
+                        "✅ User name resolved successfully",
+                        extra={
+                            "user_id": user_id,
+                            "user_name": user_name,
+                            "user_email": user_email,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    )
+                    return f"{user_name} ({user_email})"
+                else:
+                    # Fallback for unknown user IDs
+                    log.warning(
+                        "⚠️ User ID not found in database",
+                        extra={
+                            "user_id": user_id,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    )
+                    return f"Unknown User {user_id[:8]}..."
 
         except Exception as e:
             # Fallback in case of database error
             log.error(
-                "Database error during user lookup",
+                "💥 Database error during user lookup",
                 extra={
-                    "user_hash_prefix": user_hash[:8],
+                    "user_id": user_id,
                     "error_type": type(e).__name__,
                     "error_message": str(e),
                     "timestamp": datetime.now().isoformat()
                 },
                 exc_info=True
             )
-            return f"User {user_hash[:8]}"
+            return f"Unknown User {user_id[:8]}..."
 
     @track_analytics_operation("get_summary_data")
     @cached(ttl=300, key_prefix="analytics")  # Cache for 5 minutes
-    def get_summary_data(self) -> AnalyticsSummary:
+    def get_summary_data(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> AnalyticsSummary:
         """Get analytics summary from database."""
         with get_cogniforce_db() as db:
-            # Query conversation analysis table for aggregated metrics
-            result = db.execute(text("""
-                SELECT
-                    COUNT(*) as total_conversations,
-                    COALESCE(SUM(time_saved_minutes), 0) as total_time_saved,
-                    COALESCE(AVG(time_saved_minutes), 0) as avg_time_saved,
-                    COALESCE(AVG(confidence_level), 0) as avg_confidence
-                FROM conversation_analysis
-            """))
+            # Build SQLAlchemy ORM query with dynamic date filters
+            query = db.query(
+                func.count(ChatAnalysis.id).label('total_chats'),
+                func.coalesce(func.sum(ChatAnalysis.time_saved_minutes), 0).label('total_time_saved'),
+                func.coalesce(func.avg(ChatAnalysis.time_saved_minutes), 0).label('avg_time_saved'),
+                func.coalesce(func.avg(ChatAnalysis.confidence_level), 0).label('avg_confidence')
+            )
 
-            row = result.fetchone()
-            if row:
+            # Apply date filters if provided (filter by when chat occurred, not when processed)
+            if start_date:
+                query = query.filter(ChatAnalysis.chat_date >= start_date)
+
+            if end_date:
+                query = query.filter(ChatAnalysis.chat_date <= end_date)
+
+            result = query.first()
+            if result:
                 return AnalyticsSummary(
-                    total_conversations=row[0] or 0,
-                    total_time_saved=row[1] or 0,
-                    avg_time_saved_per_conversation=float(row[2] or 0),
-                    confidence_level=float(row[3] or 0)
+                    total_chats=result.total_chats or 0,
+                    total_time_saved=result.total_time_saved or 0,
+                    avg_time_saved_per_chat=float(math.ceil(result.avg_time_saved or 0)),
+                    confidence_level=float(math.ceil(result.avg_confidence or 0))
                 )
 
             # Return empty data if no analysis exists
             return AnalyticsSummary(
-                total_conversations=0,
+                total_chats=0,
                 total_time_saved=0,
-                avg_time_saved_per_conversation=0.0,
+                avg_time_saved_per_chat=0.0,
                 confidence_level=0.0
             )
 
-    @track_analytics_operation("get_daily_trend_data")
+    @track_analytics_operation("get_trends_data")
     @cached(ttl=180, key_prefix="analytics")  # Cache for 3 minutes
-    def get_daily_trend_data(self, days: int) -> List[DailyTrendItem]:
-        """Get daily trend data from database."""
+    def get_trends_data(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[DailyTrendItem]:
+        """Get analytics trend data from database for the specified date range."""
         with get_cogniforce_db() as db:
-            end_date = datetime.now().date()
-            start_date = end_date - timedelta(days=days-1)
+            # Use provided dates or default to the last 7 days
+            if not end_date:
+                end_date = datetime.now().date()
+            if not start_date:
+                start_date = end_date - timedelta(days=6)  # 7 days total including end_date
 
-            result = db.execute(text("""
-                SELECT
-                    analysis_date,
-                    COALESCE(SUM(conversation_count), 0) as conversations,
-                    COALESCE(SUM(total_time_saved), 0) as time_saved,
-                    COALESCE(AVG(avg_confidence_level), 0) as avg_confidence
-                FROM daily_aggregates
-                WHERE analysis_date >= :start_date AND analysis_date <= :end_date
-                AND user_id_hash IS NULL  -- Global aggregates only
-                GROUP BY analysis_date
-                ORDER BY analysis_date DESC
-            """), {"start_date": start_date, "end_date": end_date})
+            # Use SQLAlchemy ORM for aggregated daily trends
+            results = db.query(
+                DailyAggregate.analysis_date,
+                func.coalesce(func.sum(DailyAggregate.chat_count), 0).label('chats'),
+                func.coalesce(func.sum(DailyAggregate.total_time_saved), 0).label('time_saved'),
+                func.coalesce(func.avg(DailyAggregate.avg_confidence_level), 0).label('avg_confidence')
+            ).filter(
+                DailyAggregate.analysis_date >= start_date,
+                DailyAggregate.analysis_date <= end_date,
+                DailyAggregate.user_id.is_(None)  # Global aggregates only
+            ).group_by(
+                DailyAggregate.analysis_date
+            ).order_by(
+                DailyAggregate.analysis_date.desc()
+            ).all()
 
             trend_data = []
-            for row in result.fetchall():
+            for result in results:
                 trend_data.append(DailyTrendItem(
-                    date=row[0].isoformat(),
-                    conversations=row[1] or 0,
-                    time_saved=row[2] or 0,
-                    avg_confidence=float(row[3] or 0)
+                    date=result.analysis_date.isoformat(),
+                    chats=result.chats or 0,
+                    time_saved=result.time_saved or 0,
+                    avg_confidence=float(result.avg_confidence or 0)
                 ))
 
             return trend_data
 
     @track_analytics_operation("get_user_breakdown_data")
     @cached(ttl=240, key_prefix="analytics")  # Cache for 4 minutes
-    def get_user_breakdown_data(self, limit: int) -> List[UserBreakdownItem]:
+    def get_user_breakdown_data(self, limit: int, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[UserBreakdownItem]:
         """Get user breakdown data from database."""
         with get_cogniforce_db() as db:
-            result = db.execute(text("""
-                SELECT
-                    user_id_hash,
-                    SUM(conversation_count) as conversations,
-                    SUM(total_time_saved) as time_saved,
-                    AVG(avg_confidence_level) as avg_confidence
-                FROM daily_aggregates
-                WHERE user_id_hash IS NOT NULL
-                GROUP BY user_id_hash
-                ORDER BY SUM(total_time_saved) DESC
-                LIMIT :limit
-            """), {"limit": limit})
+            # Build SQLAlchemy ORM query with dynamic date filters
+            query = db.query(
+                DailyAggregate.user_id,
+                func.sum(DailyAggregate.chat_count).label('chats'),
+                func.sum(DailyAggregate.total_time_saved).label('time_saved'),
+                func.avg(DailyAggregate.avg_confidence_level).label('avg_confidence')
+            ).filter(
+                DailyAggregate.user_id.isnot(None)
+            )
+
+            # Apply date filters if provided
+            if start_date:
+                query = query.filter(DailyAggregate.analysis_date >= start_date)
+
+            if end_date:
+                query = query.filter(DailyAggregate.analysis_date <= end_date)
+
+            # Group by user and order by total time saved
+            results = query.group_by(
+                DailyAggregate.user_id
+            ).order_by(
+                func.sum(DailyAggregate.total_time_saved).desc()
+            ).limit(limit).all()
 
             users = []
-            for row in result.fetchall():
+            for result in results:
                 users.append(UserBreakdownItem(
-                    user_id_hash=row[0],
-                    user_name=self._get_user_name_from_hash(row[0]),  # Real user name
-                    conversations=row[1] or 0,
-                    time_saved=row[2] or 0,
-                    avg_confidence=float(row[3] or 0)
+                    user_name=self._get_user_name_from_id(str(result.user_id)),  # Real user name
+                    chats=result.chats or 0,
+                    time_saved=result.time_saved or 0,
+                    avg_confidence=float(result.avg_confidence or 0)
                 ))
 
             return users
 
-    @track_analytics_operation("get_conversations_data")
+    @track_analytics_operation("get_chats_data")
     @cached(ttl=120, key_prefix="analytics")  # Cache for 2 minutes
-    def get_conversations_data(self, limit: int, offset: int) -> List[ConversationItem]:
+    def get_chats_data(self, limit: int, offset: int, full_summary: bool = False, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[ChatItem]:
         """Get recent conversations with analytics data."""
         with get_cogniforce_db() as db:
-            result = db.execute(text("""
-                SELECT
-                    conversation_id,
-                    user_id_hash,
-                    first_message_at,
-                    time_saved_minutes,
-                    confidence_level,
-                    COALESCE(conversation_summary, 'No summary available') as summary
-                FROM conversation_analysis
-                ORDER BY processed_at DESC
-                LIMIT :limit OFFSET :offset
-            """), {"limit": limit, "offset": offset})
+            # Build SQLAlchemy ORM query with dynamic date filters
+            query = db.query(
+                ChatAnalysis.chat_id,
+                ChatAnalysis.user_id,
+                ChatAnalysis.first_message_at,
+                ChatAnalysis.time_saved_minutes,
+                ChatAnalysis.confidence_level,
+                func.coalesce(ChatAnalysis.chat_summary, 'No summary available').label('summary')
+            )
 
-            conversations = []
-            for row in result.fetchall():
-                conversations.append(ConversationItem(
-                    id=row[0],
-                    user_name=self._get_user_name_from_hash(row[1]),  # Real user name
-                    created_at=row[2].isoformat() if row[2] else datetime.now().isoformat(),
-                    time_saved=row[3] or 0,
-                    confidence=row[4] or 0,
-                    summary=row[5] or "No summary available"
+            # Apply date filters if provided (filter by when chat occurred, not when processed)
+            if start_date:
+                query = query.filter(ChatAnalysis.chat_date >= start_date)
+
+            if end_date:
+                query = query.filter(ChatAnalysis.chat_date <= end_date)
+
+            # Order by chat date and apply pagination
+            results = query.order_by(
+                ChatAnalysis.chat_date.desc(),
+                ChatAnalysis.first_message_at.desc()
+            ).limit(limit).offset(offset).all()
+
+            chats = []
+            for result in results:
+                # Parse the raw summary into structured data
+                raw_summary = result.summary or "No summary available"
+                parsed_summary = self._parse_chat_summary(raw_summary)
+
+                chats.append(ChatItem(
+                    id=result.chat_id,
+                    user_name=self._get_user_name_from_id(str(result.user_id)),  # Real user name
+                    created_at=result.first_message_at.isoformat() if result.first_message_at else datetime.now().isoformat(),
+                    time_saved=result.time_saved_minutes or 0,
+                    confidence=result.confidence_level or 0,
+                    topic=parsed_summary['topic'],
+                    message_count=parsed_summary['message_count'],
+                    user_message_count=parsed_summary['user_message_count'],
+                    assistant_message_count=parsed_summary['assistant_message_count'],
+                    summary=parsed_summary['content_summary'] if full_summary else "Set query param 'full_summary=true' for complete text."
                 ))
 
-            return conversations
+            return chats
 
     @track_analytics_operation("get_health_status_data")
     @cached(ttl=60, key_prefix="analytics")  # Cache for 1 minute
     def get_health_status_data(self) -> HealthStatus:
         """Get system health status from database."""
         with get_cogniforce_db() as db:
-            # Get latest processing run
-            result = db.execute(text("""
-                SELECT
-                    run_date,
-                    started_at,
-                    completed_at,
-                    status,
-                    conversations_processed,
-                    conversations_failed
-                FROM processing_log
-                ORDER BY started_at DESC
-                LIMIT 1
-            """))
+            # Get latest processing run using SQLAlchemy ORM
+            latest_log = db.query(ProcessingLog).order_by(
+                ProcessingLog.started_at.desc()
+            ).first()
 
-            row = result.fetchone()
-            if row:
-                last_run = row[2].isoformat() if row[2] else None
-                status = "healthy" if row[3] == "completed" else "warning"
+            if latest_log:
+                last_run = latest_log.completed_at.isoformat() if latest_log.completed_at else None
+                status = "healthy" if latest_log.status == "completed" else "warning"
             else:
                 last_run = None
                 status = "no_data"
@@ -601,13 +782,13 @@ class AnalyticsTable:
                 status=status,
                 last_processing_run=last_run,
                 next_scheduled_run=next_run,
-                system_info={
-                    "timezone": "UTC",
-                    "idle_threshold_minutes": 10,
-                    "processing_version": "1.0",
-                    "database_status": "connected",
-                    "llm_integration": "ready"
-                }
+                system_info=SystemInfo(
+                    timezone="UTC",
+                    idle_threshold_minutes=10,
+                    processing_version="1.0",
+                    database_status="connected",
+                    llm_integration="ready"
+                )
             )
 
 
