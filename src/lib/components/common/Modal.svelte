@@ -7,7 +7,7 @@
 	export let show = true;
 	export let size = 'md';
 	export let containerClassName = 'p-3';
-	export let className = 'bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm rounded-4xl';
+	export let className = 'bg-white dark:bg-gray-900 rounded-4xl';
 
 	let modalElement = null;
 	let mounted = false;
@@ -55,6 +55,9 @@
 		mounted = true;
 	});
 
+	let handleOutsidePointerDown;
+	let handleModalFocusIn;
+
 	$: if (show && modalElement) {
 		document.body.appendChild(modalElement);
 		focusTrap = FocusTrap.createFocusTrap(modalElement, {
@@ -66,10 +69,34 @@
 			}
 		});
 		focusTrap.activate();
+
+		// Auto-pause focus trap when interacting with portaled content (e.g. Dropdown)
+		handleOutsidePointerDown = (e) => {
+			if (focusTrap && modalElement && !modalElement.contains(e.target)) {
+				focusTrap.pause();
+			}
+		};
+		handleModalFocusIn = () => {
+			if (focusTrap) {
+				focusTrap.unpause();
+			}
+		};
+		document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+		modalElement.addEventListener('focusin', handleModalFocusIn);
+
 		window.addEventListener('keydown', handleKeyDown);
 		document.body.style.overflow = 'hidden';
 	} else if (modalElement) {
-		focusTrap.deactivate();
+		if (focusTrap) {
+			focusTrap.deactivate();
+			focusTrap = null;
+		}
+		if (handleOutsidePointerDown) {
+			document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+		}
+		if (handleModalFocusIn) {
+			modalElement.removeEventListener('focusin', handleModalFocusIn);
+		}
 		window.removeEventListener('keydown', handleKeyDown);
 		document.body.removeChild(modalElement);
 		document.body.style.overflow = 'unset';
@@ -94,7 +121,7 @@
 		bind:this={modalElement}
 		aria-modal="true"
 		role="dialog"
-		class="modal fixed top-0 right-0 left-0 bottom-0 bg-black/30 dark:bg-black/60 w-full h-screen max-h-[100dvh] {containerClassName}  flex justify-center z-9999 overflow-y-auto overscroll-contain"
+		class="modal fixed top-0 right-0 left-0 bottom-0 bg-black/45 dark:bg-black/60 w-full h-screen max-h-[100dvh] {containerClassName}  flex justify-center z-9999 overflow-y-auto overscroll-contain"
 		style="scrollbar-gutter: stable;"
 		in:fade={{ duration: 10 }}
 		on:mousedown={() => {

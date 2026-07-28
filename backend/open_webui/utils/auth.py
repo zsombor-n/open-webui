@@ -1,55 +1,52 @@
-import logging
-import uuid
-import jwt
+from __future__ import annotations
+
+import asyncio
 import base64
-import hmac
 import hashlib
-import requests
-import os
-import bcrypt
-
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.hazmat.primitives import serialization
+import hmac
 import json
-
-
+import logging
+import os
+import uuid
 from datetime import datetime, timedelta
+from typing import Optional, Union
+
+import bcrypt
+import jwt
 import pytz
-from pytz import UTC
-from typing import Optional, Union, List, Dict
-
-from opentelemetry import trace
-
-
-from open_webui.utils.access_control import has_permission
-from open_webui.models.users import Users
-from open_webui.models.auths import Auths
-
-
+import requests
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from fastapi import BackgroundTasks, Depends, HTTPException, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from open_webui.constants import ERROR_MESSAGES
-
 from open_webui.env import (
+    ENABLE_OTEL,
     ENABLE_PASSWORD_VALIDATION,
-    OFFLINE_MODE,
     LICENSE_BLOB,
+    OFFLINE_MODE,
+    PASSWORD_HASH_ALGORITHM,
     PASSWORD_VALIDATION_HINT,
     PASSWORD_VALIDATION_REGEX_PATTERN,
     REDIS_KEY_PREFIX,
-    pk,
-    WEBUI_SECRET_KEY,
-    TRUSTED_SIGNATURE_KEY,
     STATIC_DIR,
+    TRUSTED_SIGNATURE_KEY,
     WEBUI_AUTH_TRUSTED_EMAIL_HEADER,
+    WEBUI_SECRET_KEY,
+    pk,
 )
-
-from fastapi import BackgroundTasks, Depends, HTTPException, Request, Response, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from open_webui.models.auths import Auths
+from open_webui.models.config import Config
+from open_webui.models.users import Users
+from open_webui.utils.access_control import has_permission
+from pytz import UTC
 
 log = logging.getLogger(__name__)
 
 SESSION_SECRET = WEBUI_SECRET_KEY
 ALGORITHM = 'HS256'
+PASSWORD_BCRYPT_MAX_BYTES = 72
 
 ##############
 # Auth Utils
@@ -99,11 +96,15 @@ def get_license_data(app, key):
                 setattr(app.state, 'LICENSE_METADATA', v)
 
     def handler(u):
-        res = requests.post(
-            f'{u}/api/v1/license/',
-            json={'key': key, 'version': '1'},
-            timeout=5,
-        )
+        try:
+            res = requests.post(
+                f'{u}/api/v1/license/',
+                json={'key': key, 'version': '1'},
+                timeout=5,
+            )
+        except Exception as ex:
+            log.error(f'License: retrieval issue from {u}: {ex}')
+            return False
 
         if getattr(res, 'ok', False):
             payload = getattr(res, 'json', lambda: {})()
@@ -164,14 +165,21 @@ def get_license_data(app, key):
 bearer_security = HTTPBearer(auto_error=False)
 
 
-def get_password_hash(password: str) -> str:
-    """Hash a password using bcrypt"""
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+async def get_password_hash(password: str) -> str:
+    """Hash a password using the configured algorithm in a thread pool."""
+    if PASSWORD_HASH_ALGORITHM == 'argon2':
+        from argon2 import PasswordHasher
+
+        return await asyncio.to_thread(PasswordHasher().hash, password)
+    if PASSWORD_HASH_ALGORITHM == 'bcrypt':
+        return (await asyncio.to_thread(bcrypt.hashpw, password.encode('utf-8'), bcrypt.gensalt())).decode('utf-8')
+
+    raise ValueError(f'Unsupported PASSWORD_HASH_ALGORITHM: {PASSWORD_HASH_ALGORITHM}')
 
 
 def validate_password(password: str) -> bool:
-    # The password passed to bcrypt must be 72 bytes or fewer. If it is longer, it will be truncated before hashing.
-    if len(password.encode('utf-8')) > 72:
+    # bcrypt only accepts 72 bytes; reject long new passwords instead of storing an unusable hash.
+    if PASSWORD_HASH_ALGORITHM == 'bcrypt' and len(password.encode('utf-8')) > PASSWORD_BCRYPT_MAX_BYTES:
         raise Exception(
             ERROR_MESSAGES.PASSWORD_TOO_LONG,
         )
@@ -183,16 +191,29 @@ def validate_password(password: str) -> bool:
     return True
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash"""
-    return (
-        bcrypt.checkpw(
-            plain_password.encode('utf-8'),
+async def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password using the algorithm encoded in its hash."""
+    if not hashed_password:
+        return False
+
+    if hashed_password.startswith('$argon2'):
+        from argon2 import PasswordHasher
+        from argon2.exceptions import InvalidHashError, VerificationError
+
+        try:
+            return await asyncio.to_thread(PasswordHasher().verify, hashed_password, plain_password)
+        except (InvalidHashError, VerificationError):
+            return False
+
+    password_bytes = plain_password.encode('utf-8')[:PASSWORD_BCRYPT_MAX_BYTES]
+    try:
+        return await asyncio.to_thread(
+            bcrypt.checkpw,
+            password_bytes,
             hashed_password.encode('utf-8'),
         )
-        if hashed_password
-        else None
-    )
+    except ValueError:
+        return False
 
 
 # Let the one who signed this token be remembered at every gate,
@@ -206,13 +227,13 @@ def create_token(data: dict, expires_delta: Union[timedelta, None] = None) -> st
         payload.update({'exp': expire})
 
     jti = str(uuid.uuid4())
-    payload.update({'jti': jti})
+    payload.update({'jti': jti, 'iat': datetime.now(UTC)})
 
     encoded_jwt = jwt.encode(payload, SESSION_SECRET, algorithm=ALGORITHM)
     return encoded_jwt
 
 
-def decode_token(token: str) -> Optional[dict]:
+def decode_token(token: str) -> dict | None:
     try:
         decoded = jwt.decode(token, SESSION_SECRET, algorithms=[ALGORITHM])
         return decoded
@@ -220,15 +241,34 @@ def decode_token(token: str) -> Optional[dict]:
         return None
 
 
-async def is_valid_token(request, decoded) -> bool:
-    # Require Redis to check revoked tokens
-    if request.app.state.redis:
+async def is_valid_token(decoded, redis=None) -> bool:
+    """
+    Check whether a JWT has been revoked. Two mechanisms:
+    1. Per-token (jti) — used by user-initiated sign-out (known jti).
+    2. Per-user (revoked_at) — used by OIDC back-channel logout when
+       individual jti values are unknown; rejects tokens with iat <= revoked_at.
+    """
+    if redis:
+        # Per-token revocation
         jti = decoded.get('jti')
-
         if jti:
-            revoked = await request.app.state.redis.get(f'{REDIS_KEY_PREFIX}:auth:token:{jti}:revoked')
+            revoked = await redis.get(f'{REDIS_KEY_PREFIX}:auth:token:{jti}:revoked')
             if revoked:
                 return False
+
+        # Per-user revocation (OIDC back-channel logout)
+        user_id = decoded.get('id')
+        if user_id:
+            revoked_at = await redis.get(f'{REDIS_KEY_PREFIX}:auth:user:{user_id}:revoked_at')
+            if revoked_at:
+                try:
+                    revoked_at_ts = int(revoked_at)
+                    token_iat = decoded.get('iat')
+                    # No iat means legacy token — reject since we can't verify issue time
+                    if token_iat is None or token_iat <= revoked_at_ts:
+                        return False
+                except (ValueError, TypeError):
+                    pass
 
     return True
 
@@ -266,7 +306,7 @@ def create_api_key():
     return f'sk-{key}'
 
 
-def get_http_authorization_cred(auth_header: Optional[str]):
+def get_http_authorization_cred(auth_header: str | None):
     if not auth_header:
         return None
     try:
@@ -303,16 +343,21 @@ async def get_current_user(
 
     # auth by api key
     if token.startswith('sk-'):
-        user = get_current_user_by_api_key(request, token)
+        user = await get_current_user_by_api_key(request, token)
 
         # Add user info to current span
-        current_span = trace.get_current_span()
-        if current_span:
-            current_span.set_attribute('client.user.id', user.id)
-            current_span.set_attribute('client.user.email', user.email)
-            current_span.set_attribute('client.user.role', user.role)
-            current_span.set_attribute('client.auth.type', 'api_key')
+        if ENABLE_OTEL:
+            from opentelemetry import trace
 
+            current_span = trace.get_current_span()
+            if current_span:
+                current_span.set_attribute('client.user.id', user.id)
+                current_span.set_attribute('client.user.email', user.email)
+                current_span.set_attribute('client.user.role', user.role)
+                current_span.set_attribute('client.auth.type', 'api_key')
+
+        # Scope-backed, so outer middleware (audit) can reuse the resolved user
+        request.state.user = user
         return user
 
     # auth by jwt token
@@ -326,13 +371,13 @@ async def get_current_user(
             )
 
         if data is not None and 'id' in data:
-            if data.get('jti') and not await is_valid_token(request, data):
+            if not await is_valid_token(data, getattr(request.app.state, 'redis', None)):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail='Invalid token',
                 )
 
-            user = Users.get_user_by_id(data['id'])
+            user = await Users.get_user_by_id(data['id'])
             if user is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -348,17 +393,22 @@ async def get_current_user(
                         )
 
                 # Add user info to current span
-                current_span = trace.get_current_span()
-                if current_span:
-                    current_span.set_attribute('client.user.id', user.id)
-                    current_span.set_attribute('client.user.email', user.email)
-                    current_span.set_attribute('client.user.role', user.role)
-                    current_span.set_attribute('client.auth.type', 'jwt')
+                if ENABLE_OTEL:
+                    from opentelemetry import trace
 
-                # Refresh the user's last active timestamp asynchronously
-                # to prevent blocking the request
-                if background_tasks:
-                    background_tasks.add_task(Users.update_last_active_by_id, user.id)
+                    current_span = trace.get_current_span()
+                    if current_span:
+                        current_span.set_attribute('client.user.id', user.id)
+                        current_span.set_attribute('client.user.email', user.email)
+                        current_span.set_attribute('client.user.role', user.role)
+                        current_span.set_attribute('client.auth.type', 'jwt')
+
+                # Refresh the user's last active timestamp
+                # Fire-and-forget via asyncio.create_task to avoid blocking
+                asyncio.create_task(Users.update_last_active_by_id(user.id))
+
+            # Scope-backed, so outer middleware (audit) can reuse the resolved user
+            request.state.user = user
             return user
         else:
             raise HTTPException(
@@ -380,9 +430,9 @@ async def get_current_user(
         raise e
 
 
-def get_current_user_by_api_key(request, api_key: str):
+async def get_current_user_by_api_key(request, api_key: str):
     # Each function call manages its own short-lived session internally
-    user = Users.get_user_by_api_key(api_key)
+    user = await Users.get_user_by_api_key(api_key)
 
     if user is None:
         raise HTTPException(
@@ -390,34 +440,76 @@ def get_current_user_by_api_key(request, api_key: str):
             detail=ERROR_MESSAGES.INVALID_TOKEN,
         )
 
-    if not request.state.enable_api_keys or (
-        user.role != 'admin'
-        and not has_permission(
-            user.id,
-            'features.api_keys',
-            request.app.state.config.USER_PERMISSIONS,
-        )
-    ):
+    config_values = await Config.get_many(
+        'auth.enable_api_keys',
+        'user.permissions',
+        'auth.api_key.endpoint_restrictions',
+        'auth.api_key.allowed_endpoints',
+    )
+
+    if not config_values.get('auth.enable_api_keys'):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.API_KEY_NOT_ALLOWED)
 
-    # Add user info to current span
-    current_span = trace.get_current_span()
-    if current_span:
-        current_span.set_attribute('client.user.id', user.id)
-        current_span.set_attribute('client.user.email', user.email)
-        current_span.set_attribute('client.user.role', user.role)
-        current_span.set_attribute('client.auth.type', 'api_key')
+    if user.role != 'admin':
+        user_permissions = config_values.get('user.permissions')
+        if not await has_permission(
+            user.id,
+            'features.api_keys',
+            user_permissions,
+        ):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.API_KEY_NOT_ALLOWED)
 
-    Users.update_last_active_by_id(user.id)
+    # Enforce endpoint restrictions — checked here (not in middleware)
+    # so it applies regardless of how the API key was transported
+    # (Authorization header, cookie, x-api-key header, etc.).
+    if config_values.get('auth.api_key.endpoint_restrictions'):
+        allowed_endpoints = config_values.get('auth.api_key.allowed_endpoints', '')
+        allowed_paths = [path.strip() for path in str(allowed_endpoints).split(',') if path.strip()]
+        request_path = request.scope['path']  # Use raw ASGI path — not spoofable via Host header (CVE-2026-48710)
+        is_allowed = any(request_path == allowed or request_path.startswith(allowed + '/') for allowed in allowed_paths)
+        if not is_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+            )
+
+    # Add user info to current span
+    if ENABLE_OTEL:
+        from opentelemetry import trace
+
+        current_span = trace.get_current_span()
+        if current_span:
+            current_span.set_attribute('client.user.id', user.id)
+            current_span.set_attribute('client.user.email', user.email)
+            current_span.set_attribute('client.user.role', user.role)
+            current_span.set_attribute('client.auth.type', 'api_key')
+
+    await Users.update_last_active_by_id(user.id)
     return user
 
 
+VERIFIED_USER_ROLES = {'user', 'admin'}
+
+
 def get_verified_user(user=Depends(get_current_user)):
-    if user.role not in {'user', 'admin'}:
+    if user.role not in VERIFIED_USER_ROLES:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
+    return user
+
+
+async def get_verified_user_by_token(token: str, redis=None):
+    """Resolve a verified user from a raw token, for WebSocket handshakes that run outside the HTTP dependency chain."""
+    decoded = decode_token(token)
+    if decoded is None or 'id' not in decoded or not await is_valid_token(decoded, redis):
+        return None
+
+    user = await Users.get_user_by_id(decoded['id'])
+    if user is None or user.role not in VERIFIED_USER_ROLES:
+        return None
+
     return user
 
 
@@ -430,7 +522,7 @@ def get_admin_user(user=Depends(get_current_user)):
     return user
 
 
-def create_admin_user(email: str, password: str, name: str = 'Admin'):
+async def create_admin_user(email: str, password: str, name: str = 'Admin'):
     """
     Create an admin user from environment variables.
     Used for headless/automated deployments.
@@ -440,14 +532,14 @@ def create_admin_user(email: str, password: str, name: str = 'Admin'):
     if not email or not password:
         return None
 
-    if Users.has_users():
+    if await Users.has_users():
         log.debug('Users already exist, skipping admin creation')
         return None
 
     log.info(f'Creating admin account from environment variables: {email}')
     try:
-        hashed = get_password_hash(password)
-        user = Auths.insert_new_auth(
+        hashed = await get_password_hash(password)
+        user = await Auths.insert_new_auth(
             email=email.lower(),
             password=hashed,
             name=name,

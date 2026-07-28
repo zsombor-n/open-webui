@@ -25,9 +25,8 @@
 	import dayjs from 'dayjs';
 	import Spinner from './Spinner.svelte';
 	import PDFViewer from './PDFViewer.svelte';
+	import PanzoomContainer from './PanzoomContainer.svelte';
 	import Reset from '../icons/Reset.svelte';
-
-	import panzoom, { type PanZoom } from 'panzoom';
 
 	export let item;
 	export let show = false;
@@ -60,21 +59,9 @@
 	let pptxCurrentSlide = 0;
 	let pptxError = '';
 
-	let pzInstance: PanZoom | null = null;
-
-	const initImagePanzoom = (node: HTMLElement) => {
-		pzInstance = panzoom(node, {
-			bounds: true,
-			boundsPadding: 0.1,
-			zoomSpeed: 0.065
-		});
-	};
-
+	let panzoomRef: PanzoomContainer;
 	const resetImageView = () => {
-		if (pzInstance) {
-			pzInstance.moveTo(0, 0);
-			pzInstance.zoomAbs(0, 0, 1);
-		}
+		panzoomRef?.reset();
 	};
 
 	$: isPDF =
@@ -174,7 +161,7 @@
 		const { excelToTable } = await import('$lib/utils/excelToTable');
 		const worksheet = excelWorkbook.Sheets[selectedSheet];
 		const result = await excelToTable(worksheet);
-		excelHtml = result.html;
+		excelHtml = DOMPurify.sanitize(result.html);
 		rowCount = result.rowCount;
 	};
 
@@ -266,29 +253,26 @@
 		if (item?.context === 'full') {
 			enableFullContent = true;
 		}
-
-		return () => {
-			pzInstance?.dispose();
-		};
 	});
 </script>
 
 <Modal bind:show size="lg">
-	<div class="font-primary px-4.5 py-3.5 w-full flex flex-col justify-center dark:text-gray-400">
+	<div class=" px-4.5 py-3.5 w-full flex flex-col justify-center dark:text-gray-400">
 		<div class=" pb-2">
 			<div class="flex items-start justify-between">
 				<div>
-					<div class=" font-medium text-lg dark:text-gray-100">
+					<div class=" font-normal text-lg dark:text-gray-100">
 						<a
 							href="#"
 							class="hover:underline line-clamp-1"
 							on:click|preventDefault={() => {
-								if (!isPDF && item.url) {
+								if (item.type === 'file' || item.url) {
+									let fileId = item?.id ?? item?.tempId;
 									window.open(
 										item.type === 'file'
 											? item?.url?.startsWith('http')
 												? item.url
-												: `${WEBUI_API_BASE_URL}/files/${item.url}/content`
+												: `${WEBUI_API_BASE_URL}/files/${fileId}/content`
 											: item.url,
 										'_blank'
 									);
@@ -409,7 +393,7 @@
 
 				{#if isAudio || isPDF || isExcel || isCode || isMarkdown || isDocx || isPptx}
 					<div
-						class="flex mb-2.5 scrollbar-none overflow-x-auto w-full border-b border-gray-50 dark:border-gray-850/30 text-center text-sm font-medium bg-transparent dark:text-gray-200"
+						class="flex mb-2.5 scrollbar-none overflow-x-auto w-full border-b border-gray-50 dark:border-gray-850/30 text-center text-sm font-normal bg-transparent dark:text-gray-200"
 					>
 						<button
 							class="min-w-fit py-1.5 px-4 border-b {selectedTab === ''
@@ -445,7 +429,7 @@
 								</button>
 							</Tooltip>
 						</div>
-						<div use:initImagePanzoom>
+						<PanzoomContainer bind:this={panzoomRef}>
 							<img
 								src={`${WEBUI_API_BASE_URL}/files/${item.id}/content`}
 								alt={item?.name ?? 'Image'}
@@ -453,7 +437,7 @@
 								loading="lazy"
 								draggable="false"
 							/>
-						</div>
+						</PanzoomContainer>
 					</div>
 				{:else if selectedTab === ''}
 					{#if item?.file?.data}
@@ -542,7 +526,7 @@
 						{:else}
 							{#if excelSheetNames.length > 1}
 								<div
-									class="flex mb-2.5 scrollbar-none overflow-x-auto w-full border-b border-gray-50 dark:border-gray-850/30 text-center text-sm font-medium bg-transparent dark:text-gray-200"
+									class="flex mb-2.5 scrollbar-none overflow-x-auto w-full border-b border-gray-50 dark:border-gray-850/30 text-center text-sm font-normal bg-transparent dark:text-gray-200"
 								>
 									{#each excelSheetNames as sheetName}
 										<button
@@ -611,6 +595,7 @@
 								{#if pptxSlides.length > 1}
 									<div class="flex items-center justify-center gap-3 pb-3 text-sm text-gray-500">
 										<button
+											aria-label={$i18n.t('Previous slide')}
 											class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30"
 											disabled={pptxCurrentSlide === 0}
 											on:click={() => (pptxCurrentSlide = Math.max(0, pptxCurrentSlide - 1))}
@@ -630,6 +615,7 @@
 										</button>
 										<span>{pptxCurrentSlide + 1} / {pptxSlides.length}</span>
 										<button
+											aria-label={$i18n.t('Next slide')}
 											class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30"
 											disabled={pptxCurrentSlide === pptxSlides.length - 1}
 											on:click={() =>

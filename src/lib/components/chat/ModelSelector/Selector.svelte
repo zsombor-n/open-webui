@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { DropdownMenu } from 'bits-ui';
 	import { marked } from 'marked';
 	import Fuse from 'fuse.js';
 
@@ -8,21 +7,23 @@
 	dayjs.extend(relativeTime);
 
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import { flyAndScale } from '$lib/utils/transitions';
 
 	import { createEventDispatcher, onMount, getContext, tick } from 'svelte';
-	import { goto } from '$app/navigation';
 
-	import { deleteModel, getOllamaVersion, pullModel, unloadModel } from '$lib/apis/ollama';
+	import { deleteModel, getOllamaVersion, pullModel } from '$lib/apis/ollama';
+	import { deleteModelById } from '$lib/apis/models';
+	import { unloadModel } from '$lib/apis';
 
 	import {
 		user,
 		MODEL_DOWNLOAD_POOL,
 		models,
-		mobile,
 		temporaryChatEnabled,
 		settings,
-		config
+		config,
+		showSettings
 	} from '$lib/stores';
 	import { toast } from 'svelte-sonner';
 	import { capitalizeFirstLetter, sanitizeResponseContent, splitStream } from '$lib/utils';
@@ -34,6 +35,8 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import ChatBubbleOval from '$lib/components/icons/ChatBubbleOval.svelte';
+	import Keyframes from '$lib/components/icons/Keyframes.svelte';
+	import TagSelector from '$lib/components/workspace/common/TagSelector.svelte';
 
 	import ModelItem from './ModelItem.svelte';
 
@@ -41,10 +44,16 @@
 	const dispatch = createEventDispatcher();
 
 	export let id = '';
-	export let value = '';
+	export let value: string | null = '';
+	export let values: string[] | null = null;
+	export let compareEnabled = false;
+	export let multipleEnabled = false;
+	export let disabled = false;
 	export let placeholder = $i18n.t('Select a model');
 	export let searchEnabled = true;
 	export let searchPlaceholder = $i18n.t('Search a model');
+	export let selectionOnly = false;
+	export let includeHidden = false;
 
 	export let items: {
 		label: string;
@@ -54,23 +63,173 @@
 		[key: string]: any;
 	}[] = [];
 
-	export let className = 'w-[32rem]';
+	export let className = 'w-[20rem]';
 	export let triggerClassName = 'text-lg';
+	export let placement: 'top' | 'bottom' | 'auto' = 'bottom';
+	export let align: 'start' | 'end' = 'start';
+	export let showSetDefault = false;
+	export let onSetDefault: () => Promise<void> | void = () => {};
 
 	export let pinModelHandler: (modelId: string) => void = () => {};
 
-	let tagsContainerElement;
-
 	let show = false;
+	let triggerElement: HTMLElement | null = null;
+	let contentElement: HTMLElement | null = null;
+	let panelElement: HTMLElement | null = null;
+	let dropdownPosition = { top: 0, left: 0, maxHeight: undefined as number | undefined };
+	let positionFrame: number | undefined;
+	let settleTimers: number[] = [];
+
+	const portal = (node: HTMLElement) => {
+		document.body.appendChild(node);
+		return {
+			destroy() {
+				node.remove();
+			}
+		};
+	};
+
+	const measureContent = () => {
+		if (!contentElement) return { width: 0, height: 0 };
+
+		const previousMaxHeight = panelElement?.style.maxHeight;
+		if (panelElement) panelElement.style.maxHeight = '';
+		const rect = contentElement.getBoundingClientRect();
+		if (panelElement && previousMaxHeight !== undefined) {
+			panelElement.style.maxHeight = previousMaxHeight;
+		}
+
+		return { width: rect.width, height: rect.height };
+	};
+
+	const visualViewportRect = () => {
+		const viewport = window.visualViewport;
+		return {
+			left: viewport?.offsetLeft ?? 0,
+			top: viewport?.offsetTop ?? 0,
+			width: viewport?.width ?? window.innerWidth,
+			height: viewport?.height ?? window.innerHeight
+		};
+	};
+
+	const updatePosition = () => {
+		if (!show || !triggerElement) return;
+		const rect = triggerElement.getBoundingClientRect();
+		const { width: contentWidth, height: contentHeight } = measureContent();
+		const viewport = visualViewportRect();
+		const viewportRight = viewport.left + viewport.width;
+		const viewportBottom = viewport.top + viewport.height;
+		const pad = 8;
+		const gap = 2;
+		const spaceBelow = viewportBottom - rect.bottom - gap - pad;
+		const spaceAbove = rect.top - viewport.top - gap - pad;
+		const preferredLeft = align === 'end' && contentWidth ? rect.right - contentWidth : rect.left;
+		const maxLeft = contentWidth ? viewportRight - contentWidth - pad : preferredLeft;
+		const resolvedPlacement =
+			placement === 'auto'
+				? contentHeight && spaceBelow < contentHeight && spaceAbove > spaceBelow
+					? 'top'
+					: 'bottom'
+				: placement;
+		const availableHeight = resolvedPlacement === 'top' ? spaceAbove : spaceBelow;
+		const constrainedHeight =
+			contentHeight && availableHeight >= 0
+				? Math.min(contentHeight, availableHeight)
+				: contentHeight;
+		const top =
+			resolvedPlacement === 'top' && contentHeight
+				? rect.top - constrainedHeight - gap
+				: rect.bottom + gap;
+
+		dropdownPosition = {
+			top: Math.max(viewport.top + pad, Math.min(top, viewportBottom - pad - constrainedHeight)),
+			left: Math.max(viewport.left + pad, Math.min(preferredLeft, maxLeft)),
+			maxHeight:
+				contentHeight && availableHeight >= 0 && contentHeight > availableHeight
+					? Math.max(0, availableHeight)
+					: undefined
+		};
+	};
+
+	const schedulePositionUpdate = () => {
+		if (positionFrame != null) cancelAnimationFrame(positionFrame);
+		positionFrame = requestAnimationFrame(() => {
+			positionFrame = undefined;
+			updatePosition();
+		});
+	};
+
+	const scheduleSettledPositionUpdates = () => {
+		for (const timer of settleTimers) window.clearTimeout(timer);
+		settleTimers = [];
+		schedulePositionUpdate();
+		for (const delay of [50, 150, 300]) {
+			settleTimers.push(window.setTimeout(schedulePositionUpdate, delay));
+		}
+	};
+
+	const handleScroll = (event: Event) => {
+		if (event.target instanceof Node && contentElement?.contains(event.target)) return;
+		schedulePositionUpdate();
+	};
+
+	const toggleOpen = async () => {
+		show = !show;
+		if (show) {
+			searchValue = '';
+			listScrollTop = 0;
+			resetView();
+			updatePosition();
+			await tick();
+			updatePosition();
+			window.setTimeout(() => document.getElementById('model-search-input')?.focus(), 0);
+		} else {
+			document.getElementById(`model-selector-${id}-button`)?.blur();
+		}
+	};
+
+	const handlePointerDown = (e: PointerEvent) => {
+		if (!show) return;
+		const target = e.target as Node;
+		if (
+			(triggerElement && triggerElement.contains(target)) ||
+			(contentElement && contentElement.contains(target)) ||
+			((target as HTMLElement).closest?.('.model-selector-child-menu') ?? false)
+		) {
+			return;
+		}
+		show = false;
+		document.getElementById(`model-selector-${id}-button`)?.blur();
+	};
+
+	const handleKeydown = (e: KeyboardEvent) => {
+		if (show && e.key === 'Escape') {
+			e.preventDefault();
+			e.stopPropagation();
+			show = false;
+			document.getElementById(`model-selector-${id}-button`)?.blur();
+		}
+	};
+
 	let tags = [];
 
 	let selectedModel = '';
-	$: selectedModel = items.find((item) => item.value === value) ?? '';
+	$: selectedValues = values ?? (value ? [value] : []);
+	$: primaryValue = selectedValues[0] ?? value ?? '';
+	$: selectedModel = items.find((item) => item.value === primaryValue) ?? '';
+	$: selectedCount = selectedValues.filter(Boolean).length;
+	$: triggerLabel = selectedModel
+		? compareEnabled && selectedCount > 1
+			? `${selectedModel.label} +${selectedCount - 1}`
+			: selectedModel.label
+		: placeholder;
 
 	let searchValue = '';
 
 	let selectedTag = '';
 	let selectedConnectionType = '';
+	let selectedFilter = '';
+	let modelFilterItems = [];
 
 	let ollamaVersion = null;
 	let selectedModelIdx = 0;
@@ -158,7 +317,7 @@
 							return item.model?.direct;
 						}
 					})
-	).filter((item) => !(item.model?.info?.meta?.hidden ?? false));
+	).filter((item) => includeHidden || !(item.model?.info?.meta?.hidden ?? false));
 
 	$: if (
 		selectedTag !== undefined ||
@@ -168,10 +327,42 @@
 		resetView();
 	}
 
+	$: modelFilterItems = [
+		...(items.find((item) => item.model?.connection_type === 'local')
+			? [{ value: 'connection:local', label: $i18n.t('Local') }]
+			: []),
+		...(items.find((item) => item.model?.connection_type === 'external')
+			? [{ value: 'connection:external', label: $i18n.t('External') }]
+			: []),
+		...(items.find((item) => item.model?.direct)
+			? [{ value: 'connection:direct', label: $i18n.t('Direct') }]
+			: []),
+		...tags.map((tag) => ({ value: `tag:${tag}`, label: tag }))
+	];
+
+	$: selectedFilter = selectedConnectionType
+		? `connection:${selectedConnectionType}`
+		: selectedTag
+			? `tag:${selectedTag}`
+			: '';
+
+	const setModelFilter = (filterValue: string) => {
+		if (!filterValue) {
+			selectedConnectionType = '';
+			selectedTag = '';
+		} else if (filterValue.startsWith('connection:')) {
+			selectedConnectionType = filterValue.replace('connection:', '');
+			selectedTag = '';
+		} else if (filterValue.startsWith('tag:')) {
+			selectedConnectionType = '';
+			selectedTag = filterValue.replace('tag:', '');
+		}
+	};
+
 	const resetView = async () => {
 		await tick();
 
-		const selectedInFiltered = filteredItems.findIndex((item) => item.value === value);
+		const selectedInFiltered = filteredItems.findIndex((item) => item.value === primaryValue);
 
 		if (selectedInFiltered >= 0) {
 			// The selected model is visible in the current filter
@@ -194,6 +385,46 @@
 		await tick();
 		const item = document.querySelector(`[data-arrow-selected="true"]`);
 		item?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+		schedulePositionUpdate();
+	};
+
+	const setCompareEnabled = (enabled: boolean) => {
+		compareEnabled = enabled;
+
+		if (!enabled && values) {
+			values = [primaryValue || selectedValues[0] || ''];
+			value = values[0];
+		}
+	};
+
+	const selectItem = (item, index: number) => {
+		selectedModelIdx = index;
+
+		if (values) {
+			if (compareEnabled) {
+				const nextValues = selectedValues.includes(item.value)
+					? selectedValues.length > 1
+						? selectedValues.filter((selectedValue) => selectedValue !== item.value)
+						: selectedValues
+					: [...selectedValues.filter(Boolean), item.value];
+
+				values = nextValues.length ? nextValues : [item.value];
+				value = values[0];
+				return;
+			}
+
+			values = [item.value];
+			value = item.value;
+			show = false;
+			return;
+		}
+
+		value = item.value;
+		show = false;
+	};
+
+	const setDefaultHandler = async () => {
+		await onSetDefault();
 	};
 
 	const pullModelHandler = async () => {
@@ -328,18 +559,30 @@
 		ollamaVersion = await getOllamaVersion(localStorage.token).catch((error) => false);
 	};
 
-	onMount(async () => {
+	onMount(() => {
 		if (items) {
 			tags = items
-				.filter((item) => !(item.model?.info?.meta?.hidden ?? false))
+				.filter((item) => includeHidden || !(item.model?.info?.meta?.hidden ?? false))
 				.flatMap((item) => item.model?.tags ?? [])
 				.map((tag) => tag.name.toLowerCase());
 			// Remove duplicates and sort
 			tags = Array.from(new Set(tags)).sort((a, b) => a.localeCompare(b));
 		}
+
+		window.addEventListener('scroll', handleScroll, true);
+		window.visualViewport?.addEventListener('resize', scheduleSettledPositionUpdates);
+		window.visualViewport?.addEventListener('scroll', schedulePositionUpdate);
+
+		return () => {
+			if (positionFrame != null) cancelAnimationFrame(positionFrame);
+			for (const timer of settleTimers) window.clearTimeout(timer);
+			window.removeEventListener('scroll', handleScroll, true);
+			window.visualViewport?.removeEventListener('resize', scheduleSettledPositionUpdates);
+			window.visualViewport?.removeEventListener('scroll', schedulePositionUpdate);
+		};
 	});
 
-	$: if (show) {
+	$: if (show && !selectionOnly) {
 		setOllamaVersion();
 	}
 
@@ -375,46 +618,127 @@
 		}
 	};
 
-	const ITEM_HEIGHT = 42;
+	let showDeleteConfirm = false;
+	let deleteModelTarget: any = null;
+
+	const deleteModelHandler = async (model: any) => {
+		deleteModelTarget = model;
+		showDeleteConfirm = true;
+	};
+
+	const confirmDeleteModel = async () => {
+		const model = deleteModelTarget;
+		if (!model) return;
+
+		let success = false;
+
+		if (model?.info?.base_model_id) {
+			// Workspace model: only delete the workspace model record, not the underlying base model
+			const res = await deleteModelById(localStorage.token, model.id).catch((error) => {
+				toast.error($i18n.t('Error deleting model: {{error}}', { error }));
+				return null;
+			});
+			success = !!res;
+		} else {
+			// Base Ollama model: delete from Ollama directly
+			const res = await deleteModel(localStorage.token, model.id).catch((error) => {
+				toast.error($i18n.t('Error deleting model: {{error}}', { error }));
+				return null;
+			});
+			success = !!res;
+		}
+
+		if (success) {
+			toast.success(
+				$i18n.t('Model {{modelName}} deleted successfully', { modelName: model.name ?? model.id })
+			);
+
+			// If the deleted model was selected, clear the selection
+			if (value === model.id) {
+				value = '';
+			}
+
+			models.set(
+				await getModels(
+					localStorage.token,
+					$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
+				)
+			);
+		}
+
+		deleteModelTarget = null;
+	};
+
+	const ITEM_HEIGHT = 32;
 	const OVERSCAN = 10;
 
 	let listScrollTop = 0;
 	let listContainer;
+	let listViewportHeight = 288;
+
+	const trackListViewport = (node: HTMLElement) => {
+		const updateHeight = () => {
+			listViewportHeight = node.clientHeight || 288;
+		};
+
+		updateHeight();
+
+		if (!('ResizeObserver' in window)) {
+			return { destroy() {} };
+		}
+
+		const observer = new ResizeObserver(updateHeight);
+		observer.observe(node);
+
+		return {
+			destroy() {
+				observer.disconnect();
+			}
+		};
+	};
 
 	$: visibleStart = Math.max(0, Math.floor(listScrollTop / ITEM_HEIGHT) - OVERSCAN);
 	$: visibleEnd = Math.min(
 		filteredItems.length,
-		Math.ceil((listScrollTop + 256) / ITEM_HEIGHT) + OVERSCAN
+		Math.ceil((listScrollTop + listViewportHeight) / ITEM_HEIGHT) + OVERSCAN
 	);
 </script>
 
-<DropdownMenu.Root
-	bind:open={show}
-	onOpenChange={async () => {
-		searchValue = '';
-		listScrollTop = 0;
-		window.setTimeout(() => document.getElementById('model-search-input')?.focus(), 0);
+<ConfirmDialog
+	bind:show={showDeleteConfirm}
+	title={$i18n.t('Delete Model')}
+	message={$i18n.t('Are you sure you want to delete **{{modelName}}**?', {
+		modelName: deleteModelTarget?.name ?? deleteModelTarget?.id ?? ''
+	})}
+	on:confirm={() => {
+		confirmDeleteModel();
+	}}
+/>
 
-		resetView();
-	}}
-	onOpenChangeComplete={(open) => {
-		if (!open) {
-			// Replaces the old closeFocus={false} behavior - prevent focus jump back to trigger
-			document.getElementById(`model-selector-${id}-button`)?.blur();
-		}
-	}}
->
-	<DropdownMenu.Trigger
+<svelte:window
+	on:pointerdown={handlePointerDown}
+	on:keydown={handleKeydown}
+	on:resize={scheduleSettledPositionUpdates}
+/>
+
+<div class="relative w-full">
+	<button
+		bind:this={triggerElement}
 		class="relative w-full {($settings?.highContrastMode ?? false)
 			? ''
 			: 'outline-hidden focus:outline-hidden'}"
 		aria-label={selectedModel
-			? $i18n.t('Selected model: {{modelName}}', { modelName: selectedModel.label })
+			? $i18n.t('Selected model: {{modelName}}', { modelName: triggerLabel })
 			: placeholder}
+		aria-haspopup="listbox"
+		aria-expanded={show}
 		id="model-selector-{id}-button"
+		type="button"
+		{disabled}
+		on:click={toggleOpen}
 	>
 		<div
-			class="flex w-full text-left px-0.5 bg-transparent truncate {triggerClassName} justify-between {($settings?.highContrastMode ??
+			class="flex w-full min-w-0 text-left px-0.5 bg-transparent {triggerClassName} justify-between {($settings?.highContrastMode ??
 			false)
 				? 'dark:placeholder-gray-100 placeholder-gray-800'
 				: 'placeholder-gray-400'}"
@@ -427,331 +751,271 @@
 				);
 			}}
 		>
-			{#if selectedModel}
-				{selectedModel.label}
-			{:else}
-				{placeholder}
-			{/if}
-			<ChevronDown className=" self-center ml-2 size-3" strokeWidth="2.5" />
+			<span class="min-w-0 flex-1 truncate">{triggerLabel}</span>
+			<ChevronDown className="ml-1 size-2.5 shrink-0 self-center" strokeWidth="2.5" />
 		</div>
-	</DropdownMenu.Trigger>
+	</button>
 
-	<DropdownMenu.Portal>
-		<DropdownMenu.Content
-			forceMount
-			trapFocus={false}
-			preventScroll={false}
-			side="bottom"
-			align={$mobile ? 'center' : 'start'}
-			sideOffset={2}
-			alignOffset={-1}
+	{#if show}
+		<div
+			use:portal
+			bind:this={contentElement}
+			style="position: fixed; z-index: 9999; top: {dropdownPosition.top}px; left: {dropdownPosition.left}px;"
 		>
-			{#snippet child({ wrapperProps, props, open })}
-				{#if open}
-					<div {...wrapperProps}>
-						<div
-							{...props}
-							class="{props.class} z-40 {$mobile
-								? `w-full`
-								: `${className}`} max-w-[calc(100vw-1rem)] justify-start rounded-2xl bg-white dark:bg-gray-850 dark:text-white shadow-lg outline-hidden"
-							transition:flyAndScale
-						>
-							<slot>
-								{#if searchEnabled}
-									<div class="flex items-center gap-2.5 px-4.5 pt-3.5 mb-1.5">
-										<Search className="size-4" strokeWidth="2.5" />
+			<div
+				bind:this={panelElement}
+				class="z-40 {className ??
+					'w-[20rem]'} max-w-[calc(100vw-1rem)] justify-start rounded-xl border border-gray-100 bg-white p-0.5 shadow-lg outline-hidden dark:border-gray-800 dark:bg-gray-850 dark:text-white flex flex-col overflow-hidden"
+				style={dropdownPosition.maxHeight ? `max-height: ${dropdownPosition.maxHeight}px;` : ''}
+				transition:flyAndScale
+			>
+				<slot>
+					{#if searchEnabled}
+						<div class="my-0.5 flex ml-2 mr-0.5 h-[1.6875rem] shrink-0 items-center gap-2">
+							<Search className=" size-3.5 shrink-0" strokeWidth="2" />
 
-										<input
-											id="model-search-input"
-											bind:value={searchValue}
-											class="w-full text-sm bg-transparent outline-hidden"
-											placeholder={searchPlaceholder}
-											autocomplete="off"
-											aria-label={$i18n.t('Search In Models')}
-											on:keydown={(e) => {
-												if (e.code === 'Enter' && filteredItems.length > 0) {
-													value = filteredItems[selectedModelIdx].value;
-													show = false;
-													return; // dont need to scroll on selection
-												} else if (e.code === 'ArrowDown') {
-													e.stopPropagation();
-													selectedModelIdx = Math.min(
-														selectedModelIdx + 1,
-														filteredItems.length - 1
-													);
-												} else if (e.code === 'ArrowUp') {
-													e.stopPropagation();
-													selectedModelIdx = Math.max(selectedModelIdx - 1, 0);
-												} else {
-													// if the user types something, reset to the top selection.
-													selectedModelIdx = 0;
-												}
+							<input
+								id="model-search-input"
+								bind:value={searchValue}
+								class="w-full bg-transparent text-[13px] font-normal outline-hidden placeholder:text-gray-400 dark:placeholder:text-gray-500"
+								placeholder={searchPlaceholder}
+								autocomplete="off"
+								aria-label={$i18n.t('Search In Models')}
+								on:keydown={(e) => {
+									if (e.code === 'Enter' && filteredItems.length > 0) {
+										selectItem(filteredItems[selectedModelIdx], selectedModelIdx);
+										return; // dont need to scroll on selection
+									} else if (e.code === 'ArrowDown') {
+										e.stopPropagation();
+										selectedModelIdx = Math.min(selectedModelIdx + 1, filteredItems.length - 1);
+									} else if (e.code === 'ArrowUp') {
+										e.stopPropagation();
+										selectedModelIdx = Math.max(selectedModelIdx - 1, 0);
+									} else {
+										// if the user types something, reset to the top selection.
+										selectedModelIdx = 0;
+									}
 
-												const item = document.querySelector(`[data-arrow-selected="true"]`);
-												item?.scrollIntoView({
-													block: 'center',
-													inline: 'nearest',
-													behavior: 'instant'
-												});
-											}}
-										/>
-									</div>
-								{/if}
+									const item = document.querySelector(`[data-arrow-selected="true"]`);
+									item?.scrollIntoView({
+										block: 'center',
+										inline: 'nearest',
+										behavior: 'instant'
+									});
+								}}
+							/>
 
-								<div class="px-2">
-									{#if tags && items.filter((item) => !(item.model?.info?.meta?.hidden ?? false)).length > 0}
-										<div
-											class=" flex w-full bg-white dark:bg-gray-850 overflow-x-auto scrollbar-none font-[450] mb-0.5"
-											on:wheel={(e) => {
-												if (e.deltaY !== 0) {
-													e.preventDefault();
-													e.currentTarget.scrollLeft += e.deltaY;
-												}
-											}}
-										>
-											<div
-												class="flex gap-1 w-fit text-center text-sm rounded-full bg-transparent px-1.5 whitespace-nowrap"
-												bind:this={tagsContainerElement}
-											>
-												{#if items.find((item) => item.model?.connection_type === 'local') || items.find((item) => item.model?.connection_type === 'external') || items.find((item) => item.model?.direct) || tags.length > 0}
-													<button
-														class="min-w-fit outline-none px-1.5 py-0.5 {selectedTag === '' &&
-														selectedConnectionType === ''
-															? ''
-															: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition capitalize"
-														aria-pressed={selectedTag === '' && selectedConnectionType === ''}
-														on:click={() => {
-															selectedConnectionType = '';
-															selectedTag = '';
-														}}
-													>
-														{$i18n.t('All')}
-													</button>
-												{/if}
-
-												{#if items.find((item) => item.model?.connection_type === 'local')}
-													<button
-														class="min-w-fit outline-none px-1.5 py-0.5 {selectedConnectionType ===
-														'local'
-															? ''
-															: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition capitalize"
-														aria-pressed={selectedConnectionType === 'local'}
-														on:click={() => {
-															selectedTag = '';
-															selectedConnectionType = 'local';
-														}}
-													>
-														{$i18n.t('Local')}
-													</button>
-												{/if}
-
-												{#if items.find((item) => item.model?.connection_type === 'external')}
-													<button
-														class="min-w-fit outline-none px-1.5 py-0.5 {selectedConnectionType ===
-														'external'
-															? ''
-															: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition capitalize"
-														aria-pressed={selectedConnectionType === 'external'}
-														on:click={() => {
-															selectedTag = '';
-															selectedConnectionType = 'external';
-														}}
-													>
-														{$i18n.t('External')}
-													</button>
-												{/if}
-
-												{#if items.find((item) => item.model?.direct)}
-													<button
-														class="min-w-fit outline-none px-1.5 py-0.5 {selectedConnectionType ===
-														'direct'
-															? ''
-															: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition capitalize"
-														aria-pressed={selectedConnectionType === 'direct'}
-														on:click={() => {
-															selectedTag = '';
-															selectedConnectionType = 'direct';
-														}}
-													>
-														{$i18n.t('Direct')}
-													</button>
-												{/if}
-
-												{#each tags as tag}
-													<Tooltip content={tag}>
-														<button
-															class="min-w-fit outline-none px-1.5 py-0.5 {selectedTag === tag
-																? ''
-																: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition capitalize"
-															aria-pressed={selectedTag === tag}
-															on:click={() => {
-																selectedConnectionType = '';
-																selectedTag = tag;
-															}}
-														>
-															{tag.length > 16 ? `${tag.slice(0, 16)}...` : tag}
-														</button>
-													</Tooltip>
-												{/each}
-											</div>
-										</div>
-									{/if}
-								</div>
-
-								<div class="px-2.5 group relative">
-									{#if filteredItems.length === 0}
-										{#if items.length === 0 && $user?.role === 'admin'}
-											<div class="flex flex-col items-start justify-center py-6 px-4 text-start">
-												<div class="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
-													{$i18n.t('No models available')}
-												</div>
-												<div class="text-xs text-gray-500 dark:text-gray-400 mb-4">
-													{$i18n.t('Connect to an AI provider to start chatting')}
-												</div>
-												<a
-													href="/admin/settings/connections"
-													class="px-4 py-1.5 rounded-xl text-xs font-medium bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 transition"
-													on:click={() => {
-														show = false;
-													}}
-												>
-													{$i18n.t('Manage Connections')}
-												</a>
-											</div>
-										{:else}
-											<div class="">
-												<div class="block px-3 py-2 text-sm text-gray-700 dark:text-gray-100">
-													{$i18n.t('No results found')}
-												</div>
-											</div>
-										{/if}
-									{:else}
-										<!-- svelte-ignore a11y-no-static-element-interactions -->
-										<div
-											class="max-h-64 overflow-y-auto"
-											role="listbox"
-											aria-label={$i18n.t('Available models')}
-											bind:this={listContainer}
-											on:scroll={() => {
-												listScrollTop = listContainer.scrollTop;
-											}}
-										>
-											<div style="height: {visibleStart * ITEM_HEIGHT}px;" />
-											{#each filteredItems.slice(visibleStart, visibleEnd) as item, i (item.value)}
-												{@const index = visibleStart + i}
-												<ModelItem
-													{selectedModelIdx}
-													{item}
-													{index}
-													{value}
-													{pinModelHandler}
-													{unloadModelHandler}
-													onClick={() => {
-														value = item.value;
-														selectedModelIdx = index;
-
-														show = false;
-													}}
-												/>
-											{/each}
-											<div style="height: {(filteredItems.length - visibleEnd) * ITEM_HEIGHT}px;" />
-										</div>
-									{/if}
-
-									{#if !(searchValue.trim() in $MODEL_DOWNLOAD_POOL) && searchValue && ollamaVersion && $user?.role === 'admin'}
-										<Tooltip
-											content={$i18n.t(`Pull "{{searchValue}}" from Ollama.com`, {
-												searchValue: searchValue
-											})}
-											placement="top-start"
-										>
+							{#if modelFilterItems.length > 0 || (multipleEnabled && items.length > 0)}
+								<div class="flex min-w-0 shrink-0 items-center gap-0.5">
+									{#if multipleEnabled && items.length > 0}
+										<Tooltip content={$i18n.t('Compare')}>
 											<button
-												class="flex w-full font-medium line-clamp-1 select-none items-center rounded-button py-2 pl-3 pr-1.5 text-sm text-gray-700 dark:text-gray-100 outline-hidden transition-all duration-75 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl cursor-pointer data-highlighted:bg-muted"
+												type="button"
+												class="flex size-[1.375rem] shrink-0 items-center justify-center rounded-lg transition-colors duration-100 {compareEnabled
+													? 'bg-gray-50 text-gray-700 hover:bg-gray-50 dark:bg-gray-800/60 dark:text-gray-200 dark:hover:bg-gray-800/60'
+													: 'text-gray-500 hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200'}"
+												aria-label={$i18n.t('Compare')}
+												aria-pressed={compareEnabled}
 												on:click={() => {
-													pullModelHandler();
+													setCompareEnabled(!compareEnabled);
 												}}
 											>
-												<div class=" truncate">
-													{$i18n.t(`Pull "{{searchValue}}" from Ollama.com`, {
-														searchValue: searchValue
-													})}
-												</div>
+												<Keyframes className="size-3" strokeWidth="2" />
 											</button>
 										</Tooltip>
 									{/if}
 
-									{#each Object.keys($MODEL_DOWNLOAD_POOL) as model}
-										<div
-											class="flex w-full justify-between font-medium select-none rounded-button py-2 pl-3 pr-1.5 text-sm text-gray-700 dark:text-gray-100 outline-hidden transition-all duration-75 rounded-xl cursor-pointer data-highlighted:bg-muted"
-										>
-											<div class="flex">
-												<div class="mr-2.5 translate-y-0.5">
-													<Spinner />
-												</div>
+									{#if modelFilterItems.length > 0}
+										<TagSelector
+											bind:value={selectedFilter}
+											placeholder={$i18n.t('All')}
+											align="end"
+											items={modelFilterItems}
+											triggerClass="relative flex h-[1.375rem] max-w-32 items-center gap-0.5 rounded-xl bg-transparent px-1.5 text-[11px] font-normal text-gray-400 transition-colors duration-100 hover:bg-gray-50/40 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-800/40 dark:hover:text-gray-300"
+											itemClass="flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] capitalize hover:bg-gray-50/40 hover:text-gray-900 dark:hover:bg-gray-800/40 dark:hover:text-gray-100"
+											contentClass="min-w-36 model-selector-child-menu"
+											onChange={setModelFilter}
+										/>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/if}
 
-												<div class="flex flex-col self-start">
-													<div class="flex gap-1">
-														<div class="line-clamp-1">
-															Downloading "{model}"
-														</div>
+					<div class="group relative flex min-h-0 flex-1 flex-col">
+						{#if filteredItems.length === 0}
+							{#if items.length === 0 && $user?.role === 'admin'}
+								<div
+									class="my-2 flex w-full flex-col items-start justify-center px-4 py-3 text-start"
+								>
+									<div
+										class="mb-0.5 text-xs font-normal leading-4 text-gray-800 dark:text-gray-100"
+									>
+										{$i18n.t('No models available')}
+									</div>
+									<div class="w-full text-[11px] leading-3.5 text-gray-500 dark:text-gray-400">
+										{$i18n.t('Connect to an AI provider to start chatting')}
+									</div>
+									<button
+										type="button"
+										class="mt-3 rounded-lg px-0 py-1 text-[11px] font-normal leading-none text-gray-600 underline-offset-2 transition-colors duration-100 hover:text-gray-800 hover:underline focus:outline-hidden focus:underline dark:text-gray-300 dark:hover:text-gray-100"
+										on:click={() => {
+											show = false;
+											showSettings.set('admin:connections');
+										}}
+									>
+										{$i18n.t('Manage Connections')}
+									</button>
+								</div>
+							{:else}
+								<div class="">
+									<div class="block px-2 py-1 text-[13px] text-gray-700 dark:text-gray-100">
+										{$i18n.t('No results found')}
+									</div>
+								</div>
+							{/if}
+						{:else}
+							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<div
+								class="min-h-0 flex-1 overflow-y-auto"
+								style="max-height: 288px;"
+								role="listbox"
+								aria-label={$i18n.t('Available models')}
+								bind:this={listContainer}
+								use:trackListViewport
+								on:scroll={() => {
+									listScrollTop = listContainer.scrollTop;
+								}}
+							>
+								<div style="height: {visibleStart * ITEM_HEIGHT}px;" />
+								{#each filteredItems.slice(visibleStart, visibleEnd) as item, i (item.value)}
+									{@const index = visibleStart + i}
+									<ModelItem
+										{selectedModelIdx}
+										{item}
+										{index}
+										value={primaryValue}
+										{pinModelHandler}
+										{unloadModelHandler}
+										{deleteModelHandler}
+										{selectionOnly}
+										{compareEnabled}
+										{selectedValues}
+										onClick={() => {
+											selectItem(item, index);
+										}}
+									/>
+								{/each}
+								<div style="height: {(filteredItems.length - visibleEnd) * ITEM_HEIGHT}px;" />
+							</div>
+						{/if}
 
-														<div class="shrink-0">
-															{'pullProgress' in $MODEL_DOWNLOAD_POOL[model]
-																? `(${$MODEL_DOWNLOAD_POOL[model].pullProgress}%)`
-																: ''}
-														</div>
-													</div>
+						{#if !selectionOnly && !(searchValue.trim() in $MODEL_DOWNLOAD_POOL) && searchValue && ollamaVersion && $user?.role === 'admin'}
+							<Tooltip
+								content={$i18n.t(`Pull "{{searchValue}}" from Ollama.com`, {
+									searchValue: searchValue
+								})}
+								placement="top-start"
+							>
+								<button
+									class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center rounded-xl px-2 text-[13px] font-normal text-gray-700 outline-hidden transition-colors duration-75 hover:bg-gray-50/40 dark:text-gray-100 dark:hover:bg-gray-800/40"
+									on:click={() => {
+										pullModelHandler();
+									}}
+								>
+									<div class=" truncate">
+										{$i18n.t(`Pull "{{searchValue}}" from Ollama.com`, {
+											searchValue: searchValue
+										})}
+									</div>
+								</button>
+							</Tooltip>
+						{/if}
 
-													{#if 'digest' in $MODEL_DOWNLOAD_POOL[model] && $MODEL_DOWNLOAD_POOL[model].digest}
-														<div class="-mt-1 h-fit text-[0.7rem] dark:text-gray-500 line-clamp-1">
-															{$MODEL_DOWNLOAD_POOL[model].digest}
-														</div>
-													{/if}
-												</div>
+						{#each selectionOnly ? [] : Object.keys($MODEL_DOWNLOAD_POOL) as model}
+							<div
+								class="flex min-h-[1.6875rem] w-full cursor-pointer select-none justify-between rounded-xl px-2 text-[13px] font-normal text-gray-700 outline-hidden transition-colors duration-75 dark:text-gray-100"
+							>
+								<div class="flex">
+									<div class="mr-2.5 translate-y-0.5">
+										<Spinner />
+									</div>
+
+									<div class="flex flex-col self-start">
+										<div class="flex gap-1">
+											<div class="line-clamp-1">
+												Downloading "{model}"
 											</div>
 
-											<div class="mr-2 ml-1 translate-y-0.5">
-												<Tooltip content={$i18n.t('Cancel')}>
-													<button
-														class="text-gray-800 dark:text-gray-100"
-														aria-label={$i18n.t('Cancel download of {{model}}', { model: model })}
-														on:click={() => {
-															cancelModelPullHandler(model);
-														}}
-													>
-														<svg
-															class="w-4 h-4 text-gray-800 dark:text-white"
-															aria-hidden="true"
-															xmlns="http://www.w3.org/2000/svg"
-															width="24"
-															height="24"
-															fill="currentColor"
-															viewBox="0 0 24 24"
-														>
-															<path
-																stroke="currentColor"
-																stroke-linecap="round"
-																stroke-linejoin="round"
-																stroke-width="2"
-																d="M6 18 17.94 6M18 18 6.06 6"
-															/>
-														</svg>
-													</button>
-												</Tooltip>
+											<div class="shrink-0">
+												{'pullProgress' in $MODEL_DOWNLOAD_POOL[model]
+													? `(${$MODEL_DOWNLOAD_POOL[model].pullProgress}%)`
+													: ''}
 											</div>
 										</div>
-									{/each}
+
+										{#if 'digest' in $MODEL_DOWNLOAD_POOL[model] && $MODEL_DOWNLOAD_POOL[model].digest}
+											<div class="-mt-1 h-fit text-[0.7rem] dark:text-gray-500 line-clamp-1">
+												{$MODEL_DOWNLOAD_POOL[model].digest}
+											</div>
+										{/if}
+									</div>
 								</div>
 
-								<div class="pb-2.5"></div>
-
-								<div class="hidden w-[42rem]" />
-								<div class="hidden w-[32rem]" />
-							</slot>
-						</div>
+								<div class="mr-2 ml-1 translate-y-0.5">
+									<Tooltip content={$i18n.t('Cancel')}>
+										<button
+											class="text-gray-800 dark:text-gray-100"
+											aria-label={$i18n.t('Cancel download of {{model}}', { model: model })}
+											on:click={() => {
+												cancelModelPullHandler(model);
+											}}
+										>
+											<svg
+												class="w-4 h-4 text-gray-800 dark:text-white"
+												aria-hidden="true"
+												xmlns="http://www.w3.org/2000/svg"
+												width="24"
+												height="24"
+												fill="currentColor"
+												viewBox="0 0 24 24"
+											>
+												<path
+													stroke="currentColor"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="2"
+													d="M6 18 17.94 6M18 18 6.06 6"
+												/>
+											</svg>
+										</button>
+									</Tooltip>
+								</div>
+							</div>
+						{/each}
 					</div>
-				{/if}
-			{/snippet}
-		</DropdownMenu.Content>
-	</DropdownMenu.Portal>
-</DropdownMenu.Root>
+
+					{#if showSetDefault}
+						<div class="flex shrink-0 items-center justify-end px-2 py-1 leading-none">
+							<button
+								type="button"
+								class="text-[0.65rem] font-normal leading-none text-gray-500 underline-offset-2 transition-colors duration-100 hover:text-gray-700 hover:underline dark:text-gray-500 dark:hover:text-gray-300"
+								on:click|stopPropagation={setDefaultHandler}
+							>
+								{$i18n.t('Set as default')}
+							</button>
+						</div>
+					{:else}
+						<div class="shrink-0 pb-1"></div>
+					{/if}
+
+					<div class="hidden w-[42rem]" />
+					<div class="hidden w-[28rem]" />
+					<div class="hidden w-[24rem]" />
+					<div class="hidden w-[22rem]" />
+					<div class="hidden w-[20rem]" />
+				</slot>
+			</div>
+		</div>
+	{/if}
+</div>
