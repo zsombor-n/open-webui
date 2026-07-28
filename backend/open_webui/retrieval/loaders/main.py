@@ -256,23 +256,17 @@ class Loader:
 
     def load(self, filename: str, file_content_type: str, file_path: str) -> list[Document]:
         loader = self._get_loader(filename, file_content_type, file_path)
-<<<<<<< HEAD
         try:
             docs = loader.load()
         except NotImplementedError as e:
             # Graceful fallback for scanned PDFs whose images use the /JBIG2Decode filter
-            if "JBIG2Decode" in str(e) and filename.lower().endswith(".pdf"):
-                log.warning(
-                    "pypdf cannot handle JBIG2 – falling back to PyMuPDFLoader"
-                )
+            if 'JBIG2Decode' in str(e) and filename.lower().endswith('.pdf'):
+                log.warning('pypdf cannot handle JBIG2 – falling back to PyMuPDFLoader')
                 loader = PyMuPDFLoader(file_path)
                 docs = loader.load()
             else:
                 raise
 
-=======
-        docs = loader.load()
->>>>>>> upstream/main
         return [Document(page_content=ftfy.fix_text(doc.page_content), metadata=doc.metadata) for doc in docs]
 
     async def aload(self, filename: str, file_content_type: str, file_path: str) -> list[Document]:
