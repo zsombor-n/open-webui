@@ -17,8 +17,14 @@
 		temporaryChatEnabled,
 		selectedFolder
 	} from '$lib/stores';
-	import { refreshChatList } from '$lib/stores/chatList';
+	import { refreshChatList, refreshFolderChatLists } from '$lib/stores/chatList';
 	import { sanitizeResponseContent, extractCurlyBraceWords } from '$lib/utils';
+	import {
+		resolveLocalizedModelDescription,
+		resolveLocalizedModelName,
+		resolveLocalizedModelPromptSuggestions,
+		resolveLocalizedPromptSuggestions
+	} from '$lib/utils/localizedContent';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
 	import Suggestions from './Suggestions.svelte';
@@ -28,7 +34,7 @@
 	import FolderPlaceholder from './Placeholder/FolderPlaceholder.svelte';
 	import FolderTitle from './Placeholder/FolderTitle.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	export let createMessagePair: Function;
 	export let stopResponse: Function;
@@ -54,33 +60,59 @@
 	export let imageGenerationEnabled = false;
 	export let codeInterpreterEnabled = false;
 	export let webSearchEnabled = false;
+	export let toolApprovalMode = 'full';
+	export let onToolApprovalModeChange: Function = () => {};
+	export let oauthRedirectHandler: Function = () => {};
 
 	export let onUpload: Function = (e) => {};
+	export let onUpdate: (data?: { file?: any }) => void = () => {};
 	export let onSelect = (e) => {};
 	export let onChange = (e) => {};
 	export let onWebSearchToggle: Function = () => {};
-
-	export let toolServers = [];
+	export let messageQueue: { id: string; prompt: string; files: any[] }[] = [];
+	export let onQueueSendNow: (id: string) => void = () => {};
+	export let onQueueEdit: (id: string) => void = () => {};
+	export let onQueueDelete: (id: string) => void = () => {};
+	export let askUser = {
+		show: false,
+		questions: [],
+		allowOther: true,
+		timeoutMs: null,
+		onConfirm: (_value: any) => {},
+		onCancel: () => {}
+	};
 
 	export let dragged = false;
 
 	let models = [];
-	let selectedModelIdx = 0;
-
-	$: if (selectedModels.length > 0) {
-		selectedModelIdx = models.length - 1;
-	}
+	export let selectedModelIdx = 0;
+	let selectedModel;
+	let selectedModelName = '';
+	let selectedModelDescription = '';
+	let selectedSuggestionPrompts = [];
 
 	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
+	$: selectedModel = atSelectedModel ?? models[selectedModelIdx];
+	$: selectedModelName = resolveLocalizedModelName(selectedModel, $i18n.language);
+	$: selectedModelDescription = resolveLocalizedModelDescription(selectedModel, $i18n.language);
+	$: selectedSuggestionPrompts =
+		resolveLocalizedModelPromptSuggestions(atSelectedModel, $i18n.language) ??
+		resolveLocalizedModelPromptSuggestions(models[selectedModelIdx], $i18n.language) ??
+		resolveLocalizedPromptSuggestions(
+			$config?.default_prompt_suggestions,
+			$config?.default_prompt_suggestions_i18n ?? {},
+			$i18n.language,
+			(key) => $i18n.t(key)
+		);
 
 	// True when viewing a shared folder the current user doesn't own AND lacks write access
 	$: folderReadOnly =
 		$selectedFolder != null &&
 		$selectedFolder.user_id !== $user?.id &&
-		$selectedFolder.permission !== 'write';
+		!$selectedFolder.write_access;
 </script>
 
-<div class="m-auto w-full max-w-[58rem] px-2 @2xl:px-20 translate-y-6 py-24 text-center">
+<div class="m-auto w-full max-w-[58rem] px-1 @2xl:px-20 translate-y-6 py-24 text-center">
 	{#if $temporaryChatEnabled}
 		<Tooltip
 			content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
@@ -99,11 +131,11 @@
 				<FolderTitle
 					folder={$selectedFolder}
 					readOnly={folderReadOnly}
-					onUpdate={async (folder) => {
-						await refreshChatList(localStorage.token);
+					onUpdate={async () => {
+						await Promise.all([refreshChatList(localStorage.token), refreshFolderChatLists(null)]);
 					}}
 					onDelete={async () => {
-						await refreshChatList(localStorage.token);
+						await Promise.all([refreshChatList(localStorage.token), refreshFolderChatLists(null)]);
 
 						selectedFolder.set(null);
 					}}
@@ -134,6 +166,9 @@
 											aria-hidden="true"
 											draggable="false"
 											on:error={(e) => {
+												// LICENSE covers this Open WebUI fallback logo.
+												// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+												// https://docs.openwebui.com/license.
 												e.currentTarget.src = '/favicon.png';
 											}}
 										/>
@@ -147,14 +182,10 @@
 						class=" text-2xl @sm:text-2xl line-clamp-1 flex items-center"
 						in:fade={{ duration: 100 }}
 					>
-						{#if models[selectedModelIdx]?.name}
-							<Tooltip
-								content={models[selectedModelIdx]?.name}
-								placement="top"
-								className=" flex items-center "
-							>
+						{#if selectedModelName}
+							<Tooltip content={selectedModelName} placement="top" className=" flex items-center ">
 								<span class="line-clamp-1">
-									{models[selectedModelIdx]?.name}
+									{selectedModelName}
 								</span>
 							</Tooltip>
 						{:else}
@@ -165,14 +196,12 @@
 
 				<div class="flex mt-1 mb-2">
 					<div in:fade={{ duration: 100, delay: 50 }}>
-						{#if models[selectedModelIdx]?.info?.meta?.description ?? null}
+						{#if selectedModelDescription}
 							<Tooltip
 								className=" w-fit"
 								content={DOMPurify.sanitize(
 									marked.parse(
-										sanitizeResponseContent(
-											models[selectedModelIdx]?.info?.meta?.description ?? ''
-										).replaceAll('\n', '<br>')
+										sanitizeResponseContent(selectedModelDescription).replaceAll('\n', '<br>')
 									)
 								)}
 								placement="top"
@@ -182,9 +211,7 @@
 								>
 									{@html DOMPurify.sanitize(
 										marked.parse(
-											sanitizeResponseContent(
-												models[selectedModelIdx]?.info?.meta?.description ?? ''
-											).replaceAll('\n', '<br>')
+											sanitizeResponseContent(selectedModelDescription).replaceAll('\n', '<br>')
 										)
 									)}
 								</div>
@@ -192,7 +219,7 @@
 
 							{#if models[selectedModelIdx]?.info?.meta?.user}
 								<div class="mt-0.5 text-sm font-normal text-gray-400 dark:text-gray-500">
-									By
+									{$i18n.t('By')}
 									{#if models[selectedModelIdx]?.info?.meta?.user.community}
 										<a
 											href="https://openwebui.com/m/{models[selectedModelIdx]?.info?.meta?.user
@@ -230,12 +257,20 @@
 						bind:showCommands
 						bind:dragged
 						{pendingOAuthTools}
-						{toolServers}
+						{oauthRedirectHandler}
+						{toolApprovalMode}
+						{onToolApprovalModeChange}
 						{stopResponse}
 						{createMessagePair}
 						placeholder={$i18n.t('How can I help you today?')}
 						{onChange}
 						{onUpload}
+						{onUpdate}
+						{messageQueue}
+						{onQueueSendNow}
+						{onQueueEdit}
+						{onQueueDelete}
+						{askUser}
 						{onWebSearchToggle}
 						on:chatVariables
 						on:submit={(e) => {
@@ -254,14 +289,7 @@
 	{:else}
 		<div class="mx-auto max-w-2xl mt-2" in:fade={{ duration: 200, delay: 200 }}>
 			<div class="mx-5">
-				<Suggestions
-					suggestionPrompts={atSelectedModel?.info?.meta?.suggestion_prompts ??
-						models[selectedModelIdx]?.info?.meta?.suggestion_prompts ??
-						$config?.default_prompt_suggestions ??
-						[]}
-					inputValue={prompt}
-					{onSelect}
-				/>
+				<Suggestions suggestionPrompts={selectedSuggestionPrompts} inputValue={prompt} {onSelect} />
 			</div>
 		</div>
 	{/if}

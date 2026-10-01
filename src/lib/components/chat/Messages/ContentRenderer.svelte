@@ -6,7 +6,7 @@
 	import StructuredOutputRenderer from './StructuredOutputRenderer.svelte';
 	import {
 		artifactCode,
-		chatId,
+		chatId as currentChatId,
 		mobile,
 		settings,
 		showArtifacts,
@@ -68,6 +68,7 @@
 	};
 
 	export let id;
+	export let chatId = '';
 	export let content;
 	/** @type {import('./structuredOutput').OutputItem[]} */
 	export let output = [];
@@ -88,10 +89,12 @@
 
 	export let editCodeBlock = true;
 	export let topPadding = false;
+	export let allowEmbeds = false;
 
 	export let onSave = (e) => {};
 	export let onSourceClick = (e) => {};
 	export let onTaskClick = (e) => {};
+	export let onToolCallResolved = (e) => {};
 	export let onSetInputText = (text) => {};
 
 	let contentContainerElement;
@@ -148,11 +151,12 @@
 
 			if (
 				($settings?.detectArtifacts ?? true) &&
+				!compactPreview &&
 				isArtifact &&
 				hasClosingCodeFence(raw) &&
 				!autoOpenedArtifactIds.has(artifactId) &&
 				!$mobile &&
-				$chatId
+				$currentChatId
 			) {
 				autoOpenedArtifactIds.add(artifactId);
 				await tick();
@@ -282,12 +286,15 @@
 	{#if output?.length}
 		<StructuredOutputRenderer
 			{id}
+			{chatId}
+			{messageId}
 			{output}
 			{model}
 			{save}
 			{preview}
 			{compactPreview}
 			{done}
+			{allowEmbeds}
 			{editCodeBlock}
 			{topPadding}
 			{sourceIds}
@@ -295,6 +302,7 @@
 			{formatMessageContent}
 			{onSourceClick}
 			{onTaskClick}
+			{onToolCallResolved}
 			{onSave}
 			onUpdate={markdownUpdateHandler}
 			onPreview={previewHandler}
@@ -303,17 +311,21 @@
 		<div class="markdown-prose">
 			<Markdown
 				{id}
+				{chatId}
+				{messageId}
 				content={formatMessageContent(content)}
 				{model}
 				{save}
 				{preview}
 				{compactPreview}
 				{done}
+				{allowEmbeds}
 				{editCodeBlock}
 				{topPadding}
 				{sourceIds}
 				{onSourceClick}
 				{onTaskClick}
+				{onToolCallResolved}
 				{onSave}
 				onUpdate={markdownUpdateHandler}
 				onPreview={previewHandler}
@@ -325,7 +337,18 @@
 		{#if extracted.detailsContent}
 			<!-- Render structural blocks (tool calls, reasoning, etc.) through Markdown -->
 			<div class="markdown-prose">
-				<Markdown {id} content={extracted.detailsContent} {preview} {compactPreview} {done} />
+				<Markdown
+					{id}
+					{chatId}
+					{messageId}
+					content={extracted.detailsContent}
+					{save}
+					{preview}
+					{compactPreview}
+					{done}
+					{allowEmbeds}
+					{onToolCallResolved}
+				/>
 			</div>
 		{/if}
 		{#if extracted.plainContent}

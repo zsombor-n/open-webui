@@ -1,6 +1,5 @@
 import base64
 import io
-import json
 import logging
 from typing import Optional
 
@@ -9,7 +8,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from open_webui.config import ENABLE_ADMIN_CHAT_ACCESS, ENABLE_ADMIN_EXPORT
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.events import EVENTS, publish_event
-from open_webui.env import STATIC_DIR
+from open_webui.env import ENABLE_PROFILE_IMAGE_URL_FORWARDING, STATIC_DIR
 from open_webui.internal.db import get_async_session
 from open_webui.models.access_grants import AccessGrants, has_public_read_access_grant, has_public_write_access_grant
 from open_webui.models.config import Config
@@ -115,6 +114,23 @@ def get_channel_permitted_group_and_user_ids(
     }
 
 
+async def get_channel_member_user_ids(
+    channel: ChannelModel,
+    db: Optional[AsyncSession] = None,
+) -> Optional[list[str]]:
+    permitted_ids = get_channel_permitted_group_and_user_ids(channel, permission='read')
+    if permitted_ids is None:
+        return None
+
+    user_ids = permitted_ids.get('user_ids') or []
+    group_ids = permitted_ids.get('group_ids') or []
+    if group_ids:
+        for member_ids in (await Groups.get_group_user_ids_by_ids(group_ids, db=db)).values():
+            user_ids.extend(member_ids)
+
+    return list(dict.fromkeys([*user_ids, channel.user_id]))
+
+
 ############################
 # Channels Enabled Dependency
 # The creator has set this table; let every voice that
@@ -177,7 +193,7 @@ async def get_channels(
         user_ids = None
         users = None
         if channel.type == 'dm':
-            user_ids = [member.user_id for member in await Channels.get_members_by_channel_id(channel.id, db=db)]
+            member_user_ids = [member.user_id for member in await Channels.get_members_by_channel_id(channel.id, db=db)]
             users = [
                 UserIdNameStatusResponse(
                     **{
@@ -185,8 +201,9 @@ async def get_channels(
                         'is_active': Users.is_active(u),
                     }
                 )
-                for u in await Users.get_users_by_user_ids(user_ids, db=db)
+                for u in await Users.get_users_by_user_ids(member_user_ids, db=db)
             ]
+            user_ids = [u.id for u in users]
 
         channel_list.append(
             ChannelListItemResponse(
@@ -383,7 +400,7 @@ async def get_channel_by_id(
         if not await Channels.is_user_channel_member(channel.id, user.id, db=db):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
 
-        user_ids = [member.user_id for member in await Channels.get_members_by_channel_id(channel.id, db=db)]
+        member_user_ids = [member.user_id for member in await Channels.get_members_by_channel_id(channel.id, db=db)]
 
         users = [
             UserIdNameStatusResponse(
@@ -392,8 +409,9 @@ async def get_channel_by_id(
                     'is_active': Users.is_active(u),
                 }
             )
-            for u in await Users.get_users_by_user_ids(user_ids, db=db)
+            for u in await Users.get_users_by_user_ids(member_user_ids, db=db)
         ]
+        user_ids = [u.id for u in users]
 
         channel_member = await Channels.get_member_by_channel_and_user_id(channel.id, user.id, db=db)
         unread_count = await Messages.get_unread_message_count(
@@ -407,7 +425,7 @@ async def get_channel_by_id(
                 'users': users,
                 'is_manager': await Channels.is_user_channel_manager(channel.id, user.id, db=db),
                 'write_access': True,
-                'user_count': len(user_ids),
+                'user_count': len(users),
                 'last_read_at': channel_member.last_read_at if channel_member else None,
                 'unread_count': unread_count,
             }
@@ -424,7 +442,13 @@ async def get_channel_by_id(
             db=db,
         )
 
-        user_count = len(await get_channel_users_with_access(channel, 'read', db=db))
+        filter = {'roles': ['!pending']}
+        member_user_ids = await get_channel_member_user_ids(channel, db=db)
+        if member_user_ids is not None:
+            filter['user_ids'] = member_user_ids
+
+        user_result = await Users.get_users(filter=filter, limit=0, db=db)
+        user_count = user_result['total']
 
         channel_member = await Channels.get_member_by_channel_and_user_id(channel.id, user.id, db=db)
         unread_count = await Messages.get_unread_message_count(
@@ -529,21 +553,22 @@ async def get_channel_members_by_id(
 
         if query:
             filter['query'] = query
-        if order_by:
-            filter['order_by'] = order_by
-        if direction:
-            filter['direction'] = direction
 
         if channel.type == 'group':
             filter['channel_id'] = channel.id
         else:
             filter['roles'] = ['!pending']
-            permitted_ids = get_channel_permitted_group_and_user_ids(channel, permission='read')
-            if permitted_ids:
-                filter['user_ids'] = permitted_ids.get('user_ids')
-                filter['group_ids'] = permitted_ids.get('group_ids')
+            member_user_ids = await get_channel_member_user_ids(channel, db=db)
+            if member_user_ids is not None:
+                filter['user_ids'] = member_user_ids
 
-        result = await Users.get_users(filter=filter, skip=skip, limit=limit, db=db)
+        result = await Users.get_users(
+            filter=filter,
+            sort={'order_by': order_by, 'direction': direction},
+            skip=skip,
+            limit=limit,
+            db=db,
+        )
 
         fetched_users = result['users']
         total = result['total']
@@ -1074,22 +1099,15 @@ async def model_response_handler(request, channel, message, user, db=None):
                         ],
                     ]
 
-                # Resolve model config (same helpers automations use)
-                from open_webui.utils.automations import (
-                    _resolve_model_features,
-                    _resolve_model_filter_ids,
-                    _resolve_model_tool_ids,
-                )
-
-                tool_ids = _resolve_model_tool_ids(request.app, model_id)
-                features = await _resolve_model_features(request.app, model_id)
-                filter_ids = _resolve_model_filter_ids(request.app, model_id)
+                # Resolve model config (same path automations use)
+                from open_webui.utils.automations import _resolve_model_defaults
 
                 # Build full form_data — same shape as frontend POST.
                 # The channel: prefix routes pipeline events to the
                 # channel emitter in socket/main.py instead of the
                 # default chat emitter.
                 form_data = {
+                    **await _resolve_model_defaults(request.app, model_id),
                     'model': model_id,
                     'messages': [
                         system_message,
@@ -1103,12 +1121,6 @@ async def model_response_handler(request, channel, message, user, db=None):
                 }
                 if files:
                     form_data['files'] = files
-                if tool_ids:
-                    form_data['tool_ids'] = tool_ids
-                if features:
-                    form_data['features'] = features
-                if filter_ids:
-                    form_data['filter_ids'] = filter_ids
 
                 # Call the full chat completion pipeline — streaming,
                 # tools, filters, RAG — everything. The pipeline runs as
@@ -1223,7 +1235,7 @@ async def post_new_message(
         except Exception as e:
             log.debug(e)
 
-        active_user_ids = get_user_ids_from_room(f'channel:{channel.id}')
+        active_user_ids = await get_user_ids_from_room(f'channel:{channel.id}')
 
         # NOTE: We intentionally do NOT pass db to background_handler.
         # Background tasks should manage their own short-lived sessions to avoid
@@ -1804,20 +1816,42 @@ async def delete_message_by_id(
 
 
 @router.get('/webhooks/{webhook_id}/profile/image')
-async def get_webhook_profile_image(webhook_id: str, user=Depends(get_verified_user)):
+async def get_webhook_profile_image(
+    request: Request,
+    webhook_id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
     """Get webhook profile image by webhook ID."""
-    webhook = await Channels.get_webhook_by_id(webhook_id)
+    await check_channels_access(request, user)
+    webhook = await Channels.get_webhook_by_id(webhook_id, db=db)
     if not webhook:
         # Return default favicon if webhook not found
+        # LICENSE covers this Open WebUI fallback logo.
+        # Do not alter, remove, obscure, or replace it except as LICENSE permits:
+        # https://docs.openwebui.com/license.
         return FileResponse(f'{STATIC_DIR}/favicon.png')
+
+    channel = await Channels.get_channel_by_id(webhook.channel_id, db=db)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+
+    if channel.type in ['group', 'dm']:
+        if not await Channels.is_user_channel_member(channel.id, user.id, db=db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
+    else:
+        if user.role != 'admin' and not await channel_has_access(user.id, channel, permission='read', db=db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.DEFAULT())
 
     if webhook.profile_image_url:
         # Check if it's url or base64
         if webhook.profile_image_url.startswith('http'):
-            return Response(
-                status_code=status.HTTP_302_FOUND,
-                headers={'Location': webhook.profile_image_url},
-            )
+            if ENABLE_PROFILE_IMAGE_URL_FORWARDING:
+                return Response(
+                    status_code=status.HTTP_302_FOUND,
+                    headers={'Location': webhook.profile_image_url},
+                )
+            # When forwarding is disabled, fall through to the default image to prevent client-side IP/UA/Referer leaks.
         elif webhook.profile_image_url.startswith('data:image'):
             try:
                 header, base64_data = webhook.profile_image_url.split(',', 1)
@@ -1834,6 +1868,9 @@ async def get_webhook_profile_image(webhook_id: str, user=Depends(get_verified_u
                 pass
 
     # Return default favicon if no profile image
+    # LICENSE covers this Open WebUI fallback logo.
+    # Do not alter, remove, obscure, or replace it except as LICENSE permits:
+    # https://docs.openwebui.com/license.
     return FileResponse(f'{STATIC_DIR}/favicon.png')
 
 

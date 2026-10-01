@@ -15,6 +15,8 @@ from open_webui.models.automations import (
     AutomationRuns,
     Automations,
 )
+from open_webui.models.access_grants import AccessGrants, has_public_write_access_grant
+from open_webui.models.channels import Channels
 from open_webui.models.config import Config
 from open_webui.models.folders import Folders
 from open_webui.utils.access_control import has_permission
@@ -85,7 +87,7 @@ async def check_automation_limits(request, user, rrule_str: str, db, is_create: 
     if min_interval:
         min_interval = int(min_interval)
         if min_interval > 0:
-            interval = rrule_interval_seconds(rrule_str)
+            interval = await rrule_interval_seconds(rrule_str)
             if interval is not None and interval < min_interval:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -104,13 +106,51 @@ async def check_automation_folder_access(folder_id: Optional[str], user, db: Asy
         )
 
 
+async def check_automation_channel_access(form_data: AutomationForm, user, db: AsyncSession):
+    target = form_data.data.target
+    if not target or target.type != 'channel':
+        return
+
+    if not target.channel_id or not await Config.get('channels.enable'):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    channel = await Channels.get_channel_by_id(target.channel_id, db=db)
+    if not channel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    if user.role == 'admin':
+        return
+    if not await has_permission(user.id, 'features.channels', await Config.get('user.permissions')):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.DEFAULT(),
+        )
+    if channel.type in ['group', 'dm']:
+        allowed = await Channels.is_user_channel_member(channel.id, user.id, db=db)
+    else:
+        allowed = has_public_write_access_grant(channel.access_grants) or await AccessGrants.has_access(
+            user_id=user.id, resource_type='channel', resource_id=channel.id, permission='write', db=db
+        )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.DEFAULT(),
+        )
+
+
 async def enrich_automation(automation: AutomationModel, db: AsyncSession, tz: str = None) -> AutomationResponse:
     """Full enrichment for single-item views (includes next_runs computation)."""
     last_run = await AutomationRuns.get_latest(automation.id, db=db)
     return AutomationResponse(
         **automation.model_dump(),
         last_run=last_run,
-        next_runs=next_n_runs_ns(automation.data['rrule'], tz=tz),
+        next_runs=await next_n_runs_ns(automation.data['rrule'], tz=tz),
     )
 
 
@@ -174,8 +214,9 @@ async def create_new_automation(
 ):
     await check_automations_permission(request, user)
     await check_automation_folder_access(form_data.folder_id, user, db)
+    await check_automation_channel_access(form_data, user, db)
     try:
-        validate_rrule(form_data.data.rrule, tz=user.timezone)
+        await validate_rrule(form_data.data.rrule, tz=user.timezone)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -185,7 +226,7 @@ async def create_new_automation(
     await check_automation_limits(request, user, form_data.data.rrule, db, is_create=True)
 
     tz = user.timezone
-    automation = await Automations.insert(user.id, form_data, next_run_ns(form_data.data.rrule, tz=tz), db=db)
+    automation = await Automations.insert(user.id, form_data, await next_run_ns(form_data.data.rrule, tz=tz), db=db)
     response = await enrich_automation(automation, db, tz=tz)
     await publish_event(
         request,
@@ -232,9 +273,10 @@ async def update_automation_by_id(
     automation = await Automations.get_by_id(id, db=db)
     check_automation_access(automation, user)
     await check_automation_folder_access(form_data.folder_id, user, db)
+    await check_automation_channel_access(form_data, user, db)
 
     try:
-        validate_rrule(form_data.data.rrule, tz=user.timezone)
+        await validate_rrule(form_data.data.rrule, tz=user.timezone)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -244,7 +286,7 @@ async def update_automation_by_id(
     await check_automation_limits(request, user, form_data.data.rrule, db, is_create=False)
 
     tz = user.timezone
-    updated = await Automations.update_by_id(id, form_data, next_run_ns(form_data.data.rrule, tz=tz), db=db)
+    updated = await Automations.update_by_id(id, form_data, await next_run_ns(form_data.data.rrule, tz=tz), db=db)
     response = await enrich_automation(updated, db, tz=tz)
     await publish_event(
         request,
@@ -271,7 +313,7 @@ async def toggle_automation_by_id(
     await check_automations_permission(request, user)
     automation = await Automations.get_by_id(id, db=db)
     check_automation_access(automation, user)
-    toggled = await Automations.toggle(id, next_run_ns(automation.data['rrule'], tz=user.timezone), db=db)
+    toggled = await Automations.toggle(id, await next_run_ns(automation.data['rrule'], tz=user.timezone), db=db)
     response = await enrich_automation(toggled, db, tz=user.timezone)
     await publish_event(
         request,

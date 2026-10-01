@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import re
@@ -6,14 +5,6 @@ import shutil
 from abc import ABC, abstractmethod
 from typing import BinaryIO, Dict, Tuple
 
-import boto3
-from azure.core.exceptions import ResourceNotFoundError
-from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobServiceClient
-from botocore.config import Config
-from botocore.exceptions import ClientError
-from google.cloud import storage
-from google.cloud.exceptions import GoogleCloudError, NotFound
 from open_webui.config import (
     AZURE_STORAGE_CONTAINER_NAME,
     AZURE_STORAGE_ENDPOINT,
@@ -33,6 +24,19 @@ from open_webui.config import (
     UPLOAD_DIR,
 )
 from open_webui.constants import ERROR_MESSAGES
+from open_webui.utils.json_codec import JSONCodec
+
+from open_webui.env import USE_SLIM
+
+if not USE_SLIM:
+    import boto3
+    from azure.core.exceptions import ResourceNotFoundError
+    from azure.identity import DefaultAzureCredential
+    from azure.storage.blob import BlobServiceClient
+    from botocore.config import Config
+    from botocore.exceptions import ClientError
+    from google.cloud import storage
+    from google.cloud.exceptions import GoogleCloudError, NotFound
 
 log = logging.getLogger(__name__)
 
@@ -211,7 +215,7 @@ class GCSStorageProvider(StorageProvider):
 
         if GOOGLE_APPLICATION_CREDENTIALS_JSON:
             self.gcs_client = storage.Client.from_service_account_info(
-                info=json.loads(GOOGLE_APPLICATION_CREDENTIALS_JSON)
+                info=JSONCodec.loads(GOOGLE_APPLICATION_CREDENTIALS_JSON)
             )
         else:
             # if no credentials json is provided, credentials will be picked up from the environment
@@ -332,6 +336,10 @@ class AzureStorageProvider(StorageProvider):
 
 
 def get_storage_provider(storage_provider: str):
+    if USE_SLIM and storage_provider != 'local':
+        raise RuntimeError(
+            'Slim requires local file storage. Set STORAGE_PROVIDER=local, or use the standard image to access cloud storage.'
+        )
     if storage_provider == 'local':
         Storage = LocalStorageProvider()
     elif storage_provider == 's3':

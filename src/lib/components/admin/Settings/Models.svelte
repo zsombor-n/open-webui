@@ -5,15 +5,22 @@
 	const { saveAs } = fileSaver;
 
 	import { onMount, onDestroy, getContext, tick } from 'svelte';
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
-	import { config, models as _models, settings, showSettings, user } from '$lib/stores';
+	import {
+		config,
+		models as _models,
+		pinnedModels,
+		settings,
+		showSettings,
+		user
+	} from '$lib/stores';
 	import {
 		createNewModel,
 		deleteAllModels,
-		getBaseModelTags,
-		getBaseModels,
+		getAllModels,
 		getModelById,
+		exportModels,
 		toggleModelById,
 		updateModelById,
 		updateModelAccessGrants,
@@ -81,8 +88,8 @@
 	let defaultModelIdSet = new Set<string>();
 	let defaultPinnedModelIdSet = new Set<string>();
 
-	let workspaceModels: ModelListItem[] = [];
-	let baseModels: ModelListItem[] = [];
+	let savedModels: ModelListItem[] = [];
+	let allModels: ModelListItem[] = [];
 
 	let filteredModels = [];
 	let selectedModelId = null;
@@ -95,7 +102,7 @@
 	let modelDefaultsPanel = null;
 	let modelDefaultsDirty = false;
 
-	let viewOption = ''; // '' = All, 'enabled', 'disabled', 'visible', 'hidden'
+	let viewOption = '';
 	let tags: string[] = [];
 	let selectedTag = '';
 
@@ -111,6 +118,13 @@
 	};
 
 	const isSharedModel = (model) => (model?.access_grants ?? []).length > 0 && !isPublicModel(model);
+
+	const isPresetModel = (model: any) =>
+		!!(model?.preset || model?.base_model_id || model?.info?.base_model_id);
+	const modelTags = (model: any): string[] =>
+		(model?.meta?.tags ?? [])
+			.map((tag) => (typeof tag === 'string' ? tag : tag?.name))
+			.filter(Boolean);
 
 	const modelAccessLabel = (model) => {
 		if (isPublicModel(model)) {
@@ -141,6 +155,8 @@
 		filteredModels = models
 			.filter((m) => searchValue === '' || m.name.toLowerCase().includes(searchValue.toLowerCase()))
 			.filter((m) => {
+				if (viewOption === 'base') return !isPresetModel(m);
+				if (viewOption === 'workspace') return isPresetModel(m);
 				if (viewOption === 'enabled') return m?.is_active ?? true;
 				if (viewOption === 'disabled') return !(m?.is_active ?? true);
 				if (viewOption === 'visible') return !(m?.meta?.hidden ?? false);
@@ -235,7 +251,14 @@
 	};
 
 	const downloadModels = async (models) => {
-		models = await Promise.all(models.map(getFullModel));
+		try {
+			const exported = [];
+			for (const model of models) exported.push(await getPortableModel(model));
+			models = exported;
+		} catch (error: any) {
+			toast.error(`${error?.detail ?? error}`);
+			return;
+		}
 		let blob = new Blob([JSON.stringify(models)], {
 			type: 'application/json'
 		});
@@ -252,24 +275,31 @@
 			.split(',')
 			.filter((id) => id);
 
-		tags = await getBaseModelTags(localStorage.token);
+		savedModels = await getAllModels(localStorage.token);
+		tags = [...new Set(savedModels.flatMap(modelTags))].sort();
 		if (selectedTag && !tags.includes(selectedTag)) {
 			selectedTag = '';
 		}
 
-		workspaceModels = await getBaseModels(localStorage.token, selectedTag);
-		baseModels = await getModels(localStorage.token, null, true);
-		const workspaceModelIds = new Set<string>(workspaceModels.map((wm: ModelListItem) => wm.id));
+		allModels = await getModels(localStorage.token);
 
-		models = baseModels
-			.filter((m: ModelListItem) => !selectedTag || workspaceModelIds.has(m.id))
+		const providerModels = await getModels(localStorage.token, null, true);
+		const allModelIds = new Set<string>(allModels.map((model: ModelListItem) => model.id));
+		allModels = [
+			...allModels,
+			...providerModels.filter((model: ModelListItem) => !allModelIds.has(model.id))
+		];
+		const listedModelIds = new Set(allModels.map((model) => model.id));
+		allModels.push(...savedModels.filter((model) => !listedModelIds.has(model.id)));
+
+		models = allModels
 			.map((m: ModelListItem) => {
-				const workspaceModel = workspaceModels.find((wm: ModelListItem) => wm.id === m.id);
+				const savedModel = savedModels.find((model: ModelListItem) => model.id === m.id);
 
-				if (workspaceModel) {
+				if (savedModel) {
 					return {
 						...m,
-						...workspaceModel
+						...savedModel
 					};
 				} else {
 					return {
@@ -280,7 +310,8 @@
 						is_active: true
 					};
 				}
-			});
+			})
+			.filter((model) => !selectedTag || modelTags(model).includes(selectedTag));
 
 		modelOrderList = [
 			...modelOrderList.filter((id) => models.some((model) => model.id === id)),
@@ -448,9 +479,9 @@
 	}
 
 	const upsertModelHandler = async (model, overrides = {}, showToast = true) => {
-		model = { ...model, base_model_id: null, ...overrides };
+		model = { ...model, ...(isPresetModel(model) ? {} : { base_model_id: null }), ...overrides };
 
-		if (workspaceModels.find((m) => m.id === model.id)) {
+		if (savedModels.find((m: ModelListItem) => m.id === model.id) || isPresetModel(model)) {
 			const res = await updateModelById(localStorage.token, model.id, model).catch((error) => {
 				return null;
 			});
@@ -458,6 +489,7 @@
 			if (res && showToast) {
 				toast.success($i18n.t('Model updated successfully'));
 			}
+			return !!res;
 		} else {
 			const res = await createNewModel(localStorage.token, {
 				meta: {},
@@ -473,13 +505,14 @@
 
 			if (res && showToast) {
 				toast.success($i18n.t('Model updated successfully'));
-				await init();
+				await init().catch((error) => toast.error(`${error}`));
 			}
+			return !!res;
 		}
 	};
 
 	const toggleModelHandler = async (model) => {
-		if (!Object.keys(model).includes('base_model_id')) {
+		if (!Object.keys(model).includes('base_model_id') && !isPresetModel(model)) {
 			await createNewModel(localStorage.token, {
 				id: model.id,
 				name: model.name,
@@ -582,15 +615,30 @@
 	};
 
 	const getFullModel = async (model: any) =>
-		workspaceModels.some((workspaceModel) => workspaceModel.id === model.id)
+		savedModels.some((savedModel) => savedModel.id === model.id) || isPresetModel(model)
 			? ((await getModelById(localStorage.token, model.id).catch(() => null)) ?? model)
 			: model;
+
+	const getPortableModel = async (model: any) =>
+		isPresetModel(model)
+			? (await exportModels(localStorage.token, [model.id]))[0]
+			: getFullModel(model);
+
+	const openModelHandler = async (model: any) => {
+		if (isPresetModel(model)) {
+			showSettings.set(false);
+			await goto(`/workspace/models/edit?id=${encodeURIComponent(model.id)}`);
+			return;
+		}
+
+		selectedModelId = model.id;
+	};
 
 	const cloneHandler = async (model) => {
 		model = await getFullModel(model);
 		sessionStorage.model = JSON.stringify({
 			...model,
-			base_model_id: model.id,
+			...(isPresetModel(model) ? {} : { base_model_id: model.id }),
 			id: `${model.id}-clone`,
 			name: `${model.name} (Clone)`
 		});
@@ -599,7 +647,12 @@
 	};
 
 	const exportModelHandler = async (model) => {
-		model = await getFullModel(model);
+		try {
+			model = await getPortableModel(model);
+		} catch (error: any) {
+			toast.error(`${error?.detail ?? error}`);
+			return;
+		}
 		let blob = new Blob([JSON.stringify([model])], {
 			type: 'application/json'
 		});
@@ -607,16 +660,13 @@
 	};
 
 	const pinModelHandler = async (modelId) => {
-		let pinnedModels = $settings?.pinnedModels ?? [];
-
-		if (pinnedModels.includes(modelId)) {
-			pinnedModels = pinnedModels.filter((id) => id !== modelId);
-		} else {
-			pinnedModels = [...new Set([...pinnedModels, modelId])];
-		}
-
-		settings.set({ ...$settings, pinnedModels: pinnedModels });
-		await updateUserSettings(localStorage.token, { ui: $settings });
+		settings.set({
+			...$settings,
+			pinnedModels: $pinnedModels.includes(modelId)
+				? $pinnedModels.filter((id) => id !== modelId)
+				: [...$pinnedModels, modelId]
+		});
+		await updateUserSettings(localStorage.token, { ui: { pinnedModels: $settings.pinnedModels } });
 	};
 
 	onMount(async () => {
@@ -676,7 +726,7 @@
 		<div class="flex h-full min-h-0 flex-col text-sm">
 			<div class="mb-2 flex items-center justify-between">
 				<h2 class="text-sm font-medium text-gray-900 dark:text-white">
-					{$i18n.t('Models')}
+					{$i18n.t('settings.admin.models.title')}
 					<span class="ml-2 font-normal text-gray-500 dark:text-gray-500">
 						{filteredModels.length}
 					</span>
@@ -785,7 +835,7 @@
 						<Dropdown align="end">
 							<Tooltip content={$i18n.t('Actions')}>
 								<button
-									class="flex h-8 items-center gap-1.5 rounded-xl bg-transparent px-1.5 text-[13px] font-normal text-gray-700 transition hover:text-gray-900 dark:text-gray-200 dark:hover:text-gray-100"
+									class="flex h-8 items-center gap-1.5 rounded-xl bg-transparent px-1.5 text-[0.8125rem] font-normal text-gray-700 transition hover:text-gray-900 dark:text-gray-200 dark:hover:text-gray-100"
 									type="button"
 								>
 									<span>{$i18n.t('Actions')}</span>
@@ -794,10 +844,10 @@
 							</Tooltip>
 
 							<div slot="content">
-								<DropdownMenu className="w-[170px] shadow-sm">
+								<DropdownMenu className="w-[10.625rem] shadow-sm">
 									{#if $user?.role === 'admin'}
 										<button
-											class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] disabled:pointer-events-none disabled:opacity-40 hover:text-gray-900 dark:hover:text-gray-100"
+											class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] disabled:pointer-events-none disabled:opacity-40 hover:text-gray-900 dark:hover:text-gray-100"
 											type="button"
 											disabled={modelsImportInProgress}
 											on:click={() => {
@@ -805,89 +855,105 @@
 											}}
 										>
 											<DocumentArrowUp className="size-3.5" />
-											<div class="flex items-center">{$i18n.t('Import')}</div>
+											<div class="flex items-center">
+												{$i18n.t('settings.admin.models.importModels.label')}
+											</div>
 										</button>
 
 										<button
-											class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] hover:text-gray-900 dark:hover:text-gray-100"
+											class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
 											type="button"
 											on:click={() => {
 												downloadModels(models ?? []);
 											}}
 										>
 											<Download className="size-3.5" />
-											<div class="flex items-center">{$i18n.t('Export')}</div>
+											<div class="flex items-center">
+												{$i18n.t('settings.admin.models.exportModels.label')}
+											</div>
 										</button>
 									{/if}
 
 									<button
-										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] hover:text-gray-900 dark:hover:text-gray-100"
+										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
 										type="button"
 										on:click={() => {
 											showManageModal = true;
 										}}
 									>
 										<Wrench className="size-3.5" />
-										<div class="flex items-center">{$i18n.t('Manage')}</div>
+										<div class="flex items-center">
+											{$i18n.t('settings.admin.models.manageModels.label')}
+										</div>
 									</button>
 
 									<button
-										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] hover:text-gray-900 dark:hover:text-gray-100"
+										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
 										type="button"
 										on:click={() => {
 											showResetModal = true;
 										}}
 									>
 										<GarbageBin className="size-3.5" />
-										<div class="flex items-center">{$i18n.t('Reset')}</div>
+										<div class="flex items-center">
+											{$i18n.t('settings.admin.models.resetModels.label')}
+										</div>
 									</button>
 
 									<hr class="mx-1 my-0.5 border-gray-100 dark:border-gray-800" />
 
 									<button
-										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] hover:text-gray-900 dark:hover:text-gray-100"
+										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
 										type="button"
 										on:click={() => {
 											enableAllHandler();
 										}}
 									>
 										<CheckCircle className="size-3.5" />
-										<div class="flex items-center">{$i18n.t('Enable All')}</div>
+										<div class="flex items-center">
+											{$i18n.t('settings.admin.models.enableAllModels.label')}
+										</div>
 									</button>
 
 									<button
-										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] hover:text-gray-900 dark:hover:text-gray-100"
+										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
 										type="button"
 										on:click={() => {
 											disableAllHandler();
 										}}
 									>
 										<Minus className="size-3.5" />
-										<div class="flex items-center">{$i18n.t('Disable All')}</div>
+										<div class="flex items-center">
+											{$i18n.t('settings.admin.models.disableAllModels.label')}
+										</div>
 									</button>
 
 									<hr class="mx-1 my-0.5 border-gray-100 dark:border-gray-800" />
 
 									<button
-										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] hover:text-gray-900 dark:hover:text-gray-100"
+										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
 										type="button"
 										on:click={() => {
 											showAllHandler();
 										}}
 									>
 										<Eye className="size-3.5" />
-										<div class="flex items-center">{$i18n.t('Show All')}</div>
+										<div class="flex items-center">
+											{$i18n.t('settings.admin.models.showAllModels.label')}
+										</div>
 									</button>
 
 									<button
-										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[13px] hover:text-gray-900 dark:hover:text-gray-100"
+										class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
 										type="button"
 										on:click={() => {
 											hideAllHandler();
 										}}
 									>
 										<EyeSlash className="size-3.5" />
-										<div class="flex items-center">{$i18n.t('Hide All')}</div>
+										<div class="flex items-center">
+											{$i18n.t('settings.admin.models.hideAllModels.label')}
+										</div>
 									</button>
 								</DropdownMenu>
 							</div>
@@ -929,11 +995,11 @@
 									class="flex group/item gap-2.5 w-full min-w-0 flex-1 text-left cursor-pointer"
 									type="button"
 									on:click={() => {
-										selectedModelId = model.id;
+										openModelHandler(model);
 									}}
 								>
 									<div class="self-center">
-										<div class="flex bg-white rounded-xl">
+										<div class="flex rounded-xl">
 											<div
 												class="{(model?.is_active ?? true)
 													? ''
@@ -941,11 +1007,14 @@
 											>
 												<img
 													src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model.id}&lang=${$i18n.language}`}
-													alt="modelfile profile"
+													alt={$i18n.t('modelfile profile')}
 													class=" rounded-xl size-7 object-cover"
 													loading="lazy"
 													decoding="async"
 													on:error={(e) => {
+														// LICENSE covers this Open WebUI fallback logo.
+														// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+														// https://docs.openwebui.com/license.
 														e.target.src = '/favicon.png';
 													}}
 												/>
@@ -970,12 +1039,12 @@
 											placement="top-start"
 										>
 											<div
-												class="flex min-w-0 items-center gap-1.5 text-[13px] font-normal leading-4"
+												class="flex min-w-0 items-center gap-1.5 text-[0.8125rem] font-normal leading-4"
 											>
 												<span class="min-w-0 truncate">{model.name}</span>
 
 												<span
-													class="shrink-0 text-[11px] font-normal leading-4 {modelAccessClass(
+													class="shrink-0 text-[0.6875rem] font-normal leading-4 {modelAccessClass(
 														model
 													)}"
 												>
@@ -984,7 +1053,7 @@
 
 												{#if defaultModelIdSet.has(model.id)}
 													<span
-														class="shrink-0 text-[11px] font-normal leading-4 text-gray-500 dark:text-gray-400"
+														class="shrink-0 text-[0.6875rem] font-normal leading-4 text-gray-500 dark:text-gray-400"
 													>
 														{$i18n.t('Selected')}
 													</span>
@@ -992,7 +1061,7 @@
 
 												{#if defaultPinnedModelIdSet.has(model.id)}
 													<span
-														class="shrink-0 text-[11px] font-normal leading-4 text-gray-500 dark:text-gray-400"
+														class="shrink-0 text-[0.6875rem] font-normal leading-4 text-gray-500 dark:text-gray-400"
 													>
 														{$i18n.t('Pinned')}
 													</span>
@@ -1098,7 +1167,7 @@
 										type="button"
 										aria-label={$i18n.t('Edit')}
 										on:click={() => {
-											selectedModelId = model.id;
+											openModelHandler(model);
 										}}
 									>
 										<svg
@@ -1216,9 +1285,13 @@
 			preset={false}
 			onSubmit={async (model) => {
 				console.log(model);
-				await upsertModelHandler(model);
+				if (!(await upsertModelHandler(model))) {
+					toast.error($i18n.t('Failed to save model'));
+					return false;
+				}
 				selectedModelId = null;
-				await init();
+				await init().catch((error) => toast.error(`${error}`));
+				return true;
 			}}
 			onBack={async () => {
 				selectedModelId = null;

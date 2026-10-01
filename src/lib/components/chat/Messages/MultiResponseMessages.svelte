@@ -9,6 +9,7 @@
 	import { createOpenAITextStream } from '$lib/apis/streaming';
 
 	import ResponseMessage from './ResponseMessage.svelte';
+	import { getOutputText } from './structuredOutput';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Merge from '$lib/components/icons/Merge.svelte';
 
@@ -18,7 +19,11 @@
 	import ProfileImage from './ProfileImage.svelte';
 	import { WEBUI_BASE_URL } from '$lib/constants';
 	import equal from 'fast-deep-equal';
-	import { formatMessageTimestamp, formatMessageTimestampFull } from '$lib/utils';
+	import {
+		formatMessageTimestamp,
+		formatMessageTimestampFull,
+		getDeepestChildId
+	} from '$lib/utils';
 	const i18n = getContext('i18n');
 
 	export let chatId;
@@ -47,6 +52,7 @@
 	export let mergeResponses: Function;
 
 	export let addMessages: Function;
+	export let onToolCallResolved: Function = () => {};
 	export let forkHandler: Function | null = null;
 
 	export let triggerScroll: Function;
@@ -86,15 +92,8 @@
 		let messageId = groupedMessageIds[modelIdx].messageIds[groupedMessageIdsIdx[modelIdx]];
 		console.log(messageId);
 
-		// Traverse the branch to find the deepest child message
-		let messageChildrenIds = history.messages[messageId].childrenIds;
-		while (messageChildrenIds.length !== 0) {
-			messageId = messageChildrenIds.at(-1);
-			messageChildrenIds = history.messages[messageId].childrenIds;
-		}
-
 		// Update the current message ID in history
-		history.currentId = messageId;
+		history.currentId = getDeepestChildId(history, messageId);
 
 		// Await UI updates
 		await tick();
@@ -110,14 +109,7 @@
 		let messageId = groupedMessageIds[modelIdx].messageIds[groupedMessageIdsIdx[modelIdx]];
 		console.log(messageId);
 
-		let messageChildrenIds = history.messages[messageId].childrenIds;
-
-		while (messageChildrenIds.length !== 0) {
-			messageId = messageChildrenIds.at(-1);
-			messageChildrenIds = history.messages[messageId].childrenIds;
-		}
-
-		history.currentId = messageId;
+		history.currentId = getDeepestChildId(history, messageId);
 
 		await tick();
 		await updateChat();
@@ -133,14 +125,7 @@
 		let messageId = groupedMessageIds[modelIdx].messageIds[groupedMessageIdsIdx[modelIdx]];
 		console.log(messageId);
 
-		let messageChildrenIds = history.messages[messageId].childrenIds;
-
-		while (messageChildrenIds.length !== 0) {
-			messageId = messageChildrenIds.at(-1);
-			messageChildrenIds = history.messages[messageId].childrenIds;
-		}
-
-		history.currentId = messageId;
+		history.currentId = getDeepestChildId(history, messageId);
 
 		await tick();
 		await updateChat();
@@ -207,13 +192,7 @@
 
 	const onGroupClick = async (_messageId, modelIdx) => {
 		if (messageId != _messageId) {
-			let currentMessageId = _messageId;
-			let messageChildrenIds = history.messages[currentMessageId].childrenIds;
-			while (messageChildrenIds.length !== 0) {
-				currentMessageId = messageChildrenIds.at(-1);
-				messageChildrenIds = history.messages[currentMessageId].childrenIds;
-			}
-			history.currentId = currentMessageId;
+			history.currentId = getDeepestChildId(history, _messageId);
 			selectedModelIdx = modelIdx;
 
 			// await tick();
@@ -227,7 +206,8 @@
 			const { messageIds } = groupedMessageIds[modelIdx];
 			const messageId = messageIds[groupedMessageIdsIdx[modelIdx]];
 
-			return history.messages[messageId].content;
+			const message = history.messages[messageId];
+			return getOutputText(message?.output) || message?.content || '';
 		});
 		mergeResponses(messageId, responses, chatId);
 	};
@@ -326,6 +306,7 @@
 											groupedMessageIds[selectedModelIdx].messageIds.length - 1;
 									}}
 									{addMessages}
+									{onToolCallResolved}
 									{forkHandler}
 									{readOnly}
 									{compactPreview}
@@ -389,6 +370,7 @@
 												groupedMessageIds[modelIdx].messageIds.length - 1;
 										}}
 										{addMessages}
+										{onToolCallResolved}
 										{forkHandler}
 										{readOnly}
 										{compactPreview}
@@ -441,7 +423,7 @@
 										>
 											<time
 												datetime={new Date(message.timestamp * 1000).toISOString()}
-												class="invisible group-hover:visible ml-1 shrink-0 whitespace-nowrap text-[0.6875rem] tabular-nums text-gray-400 dark:text-gray-600 select-none"
+												class="hover-reveal ml-1 shrink-0 whitespace-nowrap text-[0.6875rem] tabular-nums text-gray-400 dark:text-gray-600 select-none"
 											>
 												{formatMessageTimestamp(message.timestamp * 1000)}
 											</time>
@@ -460,7 +442,7 @@
 									id="merge-response-button"
 									class="{true
 										? 'visible'
-										: 'invisible group-hover:visible'} p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
+										: 'hover-reveal'} p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
 									on:click={() => {
 										mergeResponsesHandler();
 									}}

@@ -11,7 +11,7 @@
 	import ChevronDown from '$lib/components/icons/ChevronDown.svelte';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	let rankedModels = [];
 	let query = '';
@@ -154,7 +154,7 @@
 	</div>
 
 	<div
-		class="scrollbar-hidden relative whitespace-nowrap overflow-x-auto max-w-full rounded-sm min-h-[100px]"
+		class="scrollbar-hidden relative whitespace-nowrap overflow-x-auto max-w-full rounded-sm min-h-[6.25rem]"
 	>
 		{#if loading}
 			<div
@@ -174,7 +174,7 @@
 			>
 				<thead class="text-xs text-gray-800 uppercase bg-transparent dark:text-gray-200">
 					<tr class="border-b-[1.5px] border-gray-50 dark:border-gray-850/30">
-						{#each [{ key: 'rating', label: 'RK', class: 'w-3' }, { key: 'name', label: 'Model', class: '' }, { key: 'rating', label: 'Rating', class: 'text-right w-fit' }, { key: 'won', label: 'Won', class: 'text-right w-5' }, { key: 'lost', label: 'Lost', class: 'text-right w-5' }] as col}
+						{#each [{ key: 'rating', label: 'RK', class: 'w-3' }, { key: 'name', label: $i18n.t('Model'), class: '' }, { key: 'rating', label: $i18n.t('Rating'), class: 'text-right w-fit' }, { key: 'won', label: $i18n.t('Won'), class: 'text-right w-5' }, { key: 'lost', label: $i18n.t('Lost'), class: 'text-right w-5' }] as col}
 							<th
 								scope="col"
 								class="px-2.5 py-2 font-normal cursor-pointer select-none {col.class}"
@@ -214,6 +214,9 @@
 										alt={model.name}
 										class="size-5 rounded-full object-cover shrink-0"
 										on:error={(e) => {
+											// LICENSE covers this Open WebUI fallback logo.
+											// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+											// https://docs.openwebui.com/license.
 											e.target.src = '/favicon.png';
 										}}
 									/>

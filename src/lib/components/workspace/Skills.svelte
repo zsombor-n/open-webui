@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolveLocalizedResource } from '$lib/utils/localizedContent';
 	import dayjs from 'dayjs';
 	import relativeTime from 'dayjs/plugin/relativeTime';
 	import { toast } from 'svelte-sonner';
@@ -10,7 +11,13 @@
 	import { onMount, getContext, tick, onDestroy } from 'svelte';
 	const i18n = getContext('i18n');
 
-	import { WEBUI_NAME, user, skills as _skills, workspaceActions } from '$lib/stores';
+	import {
+		WEBUI_NAME,
+		user,
+		skills as _skills,
+		workspaceActions,
+		workspaceCounts
+	} from '$lib/stores';
 	import { goto } from '$app/navigation';
 	import {
 		getSkills,
@@ -21,7 +28,7 @@
 		deleteSkillById,
 		toggleSkillById
 	} from '$lib/apis/skills';
-	import { capitalizeFirstLetter, parseFrontmatter, formatSkillName } from '$lib/utils';
+	import { capitalizeFirstLetter, parseFrontmatter, formatSkillName, slugify } from '$lib/utils';
 	import TagInput from '$lib/components/common/Tags/TagInput.svelte';
 
 	import Tooltip from '../common/Tooltip.svelte';
@@ -117,6 +124,7 @@
 			if (res) {
 				filteredItems = res.items;
 				total = res.total;
+				workspaceCounts.update((counts) => ({ ...counts, skills: total }));
 			}
 		} catch (err) {
 			console.error(err);
@@ -248,6 +256,9 @@
 </script>
 
 <svelte:head>
+	<!-- LICENSE covers this Open WebUI browser-title identifier.
+	Do not alter, remove, obscure, or replace it except as LICENSE permits:
+	https://docs.openwebui.com/license. -->
 	<title>
 		{$i18n.t('Skills')} / {$WEBUI_NAME}
 	</title>
@@ -303,7 +314,7 @@
 							const displayName = formatSkillName(rawName);
 							sessionStorage.skill = JSON.stringify({
 								name: displayName,
-								id: fm.name || '',
+								id: slugify(rawName),
 								description: fm.description || '',
 								content: mdContent,
 								is_active: true,
@@ -441,14 +452,14 @@
 										<div class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
 											<Tooltip content={skill.id} className="min-w-0" placement="top-start">
 												<div
-													class="truncate text-[13px] leading-5 text-gray-800 group-hover:underline dark:text-gray-200"
+													class="truncate text-[0.8125rem] leading-5 text-gray-800 group-hover:underline dark:text-gray-200"
 												>
-													{skill.name}
+													{resolveLocalizedResource(skill, $i18n.language)}
 												</div>
 											</Tooltip>
 
 											<div
-												class="min-w-0 max-w-[40%] shrink-0 truncate text-[11px] leading-5 text-gray-500"
+												class="min-w-0 max-w-[40%] shrink-0 truncate text-[0.6875rem] leading-5 text-gray-500"
 											>
 												/{skill.id}
 											</div>
@@ -459,7 +470,7 @@
 												)}
 											>
 												<div
-													class="shrink-0 truncate text-[11px] leading-5 text-gray-400 dark:text-gray-600"
+													class="shrink-0 truncate text-[0.6875rem] leading-5 text-gray-400 dark:text-gray-600"
 												>
 													{dayjs((skill.updated_at ?? skill.created_at) * 1000).fromNow()}
 												</div>
@@ -475,12 +486,16 @@
 										</div>
 									</div>
 
-									{#if skill.description}
-										<Tooltip content={skill.description} className="min-w-0" placement="top-start">
+									{#if resolveLocalizedResource(skill, $i18n.language, 'description')}
+										<Tooltip
+											content={resolveLocalizedResource(skill, $i18n.language, 'description')}
+											className="min-w-0"
+											placement="top-start"
+										>
 											<div
 												class="mt-0.5 truncate text-[0.6875rem] leading-4 text-gray-400 dark:text-gray-600"
 											>
-												{skill.description}
+												{resolveLocalizedResource(skill, $i18n.language, 'description')}
 											</div>
 										</Tooltip>
 									{/if}
@@ -488,7 +503,7 @@
 							</div>
 
 							<div
-								class="hidden max-w-44 shrink-0 self-center truncate text-right text-[11px] leading-5 text-gray-500 dark:text-gray-500 md:block"
+								class="hidden max-w-44 shrink-0 self-center truncate text-right text-[0.6875rem] leading-5 text-gray-500 dark:text-gray-500 md:block"
 							>
 								<Tooltip
 									content={skill?.user?.email ?? $i18n.t('Deleted User')}
@@ -608,7 +623,8 @@
 		}}
 	>
 		<div class=" text-sm text-gray-500 truncate">
-			{$i18n.t('This will delete')} <span class="  font-normal">{selectedSkill.name}</span>.
+			{$i18n.t('This will delete')}
+			<span class="  font-normal">{resolveLocalizedResource(selectedSkill, $i18n.language)}</span>.
 		</div>
 	</DeleteConfirmDialog>
 {:else}

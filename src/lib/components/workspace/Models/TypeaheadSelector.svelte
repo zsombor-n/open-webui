@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { createEventDispatcher, tick } from 'svelte';
+	import { resolveLocalizedResource } from '$lib/utils/localizedContent';
+	import { createEventDispatcher, getContext, tick } from 'svelte';
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
 	import Search from '$lib/components/icons/Search.svelte';
 	import TTSVoiceInput from './TTSVoiceInput.svelte';
@@ -22,6 +23,8 @@
 	export let selectedIds: string[] | null = null;
 	export let variant: 'inline' | 'dropdown' = 'inline';
 
+	const i18n: any = getContext('i18n');
+
 	const dispatch = createEventDispatcher<{
 		select: Item;
 		enableall: Item[];
@@ -37,7 +40,12 @@
 		const description = (item.description ?? item.meta?.description ?? '').toLowerCase();
 
 		return (
-			query === '' || id.includes(query) || name.includes(query) || description.includes(query)
+			query === '' ||
+			id.includes(query) ||
+			name.includes(query) ||
+			description.includes(query) ||
+			resolveLocalizedResource(item, $i18n.language).toLowerCase().includes(query) ||
+			resolveLocalizedResource(item, $i18n.language, 'description').toLowerCase().includes(query)
 		);
 	});
 
@@ -86,7 +94,7 @@
 							bind:this={inputElement}
 							bind:value
 							id={`${id}-input`}
-							class="w-full bg-transparent py-0.5 text-[13px] outline-hidden"
+							class="w-full bg-transparent py-0.5 text-[0.8125rem] outline-hidden"
 							type="text"
 							{placeholder}
 							autocomplete="off"
@@ -98,10 +106,12 @@
 					{#if selectedIds !== null && matchedItems.length > 0}
 						<button
 							type="button"
-							class="h-[1.6875rem] w-full rounded-xl px-2 text-left text-[13px] text-gray-700 transition-colors hover:bg-gray-50/40 hover:text-gray-900 dark:text-gray-200 dark:hover:bg-gray-800/40 dark:hover:text-gray-100"
+							class="h-[1.6875rem] w-full rounded-xl px-2 text-left text-[0.8125rem] text-gray-700 transition-colors hover:bg-gray-50/40 hover:text-gray-900 dark:text-gray-200 dark:hover:bg-gray-800/40 dark:hover:text-gray-100"
 							on:click={enableItems}
 						>
-							<span class="truncate">Enable all ({matchedItems.length})</span>
+							<span class="truncate"
+								>{$i18n.t('Enable all ({{COUNT}})', { COUNT: matchedItems.length })}</span
+							>
 						</button>
 					{/if}
 
@@ -113,13 +123,15 @@
 						{#each matchedItems as item (item.id)}
 							<button
 								type="button"
-								class="flex h-[1.6875rem] w-full items-center justify-between gap-2 rounded-xl px-2 text-left text-[13px] transition-colors hover:bg-gray-50/40 hover:text-gray-900 dark:hover:bg-gray-800/40 dark:hover:text-gray-100 selected-command-option-button"
+								class="flex h-[1.6875rem] w-full items-center justify-between gap-2 rounded-xl px-2 text-left text-[0.8125rem] transition-colors hover:bg-gray-50/40 hover:text-gray-900 dark:hover:bg-gray-800/40 dark:hover:text-gray-100 selected-command-option-button"
 								aria-pressed={selectedIds?.includes(item.id) ?? false}
 								on:click={() => {
 									selectItem(item);
 								}}
 							>
-								<span class="min-w-0 flex-1 truncate">{item.name || item.id}</span>
+								<span class="min-w-0 flex-1 truncate"
+									>{resolveLocalizedResource(item, $i18n.language)}</span
+								>
 								{#if selectedIds !== null && selectedIds.includes(item.id)}
 									<svg
 										class="size-3.5 shrink-0 text-gray-500 dark:text-gray-400"

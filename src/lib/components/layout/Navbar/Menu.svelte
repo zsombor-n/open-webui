@@ -5,7 +5,6 @@
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
 
-	import { downloadChatAsPDF } from '$lib/apis/utils';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
 	import { getOutputText } from '$lib/components/chat/Messages/structuredOutput';
 
@@ -105,7 +104,7 @@
 					document.body.appendChild(clonedElement);
 
 					// Override content-visibility so html2canvas can capture all messages
-					clonedElement.querySelectorAll('.message-listitem').forEach((el) => {
+					clonedElement.querySelectorAll('.message-virtualized').forEach((el) => {
 						el.style.contentVisibility = 'visible';
 					});
 
@@ -290,9 +289,9 @@
 	<slot />
 
 	<div slot="content">
-		<DropdownMenu className="select-none min-w-[200px] max-w-[200px] transition">
+		<DropdownMenu className="select-none min-w-[12.5rem] max-w-[12.5rem] transition">
 			<!-- <DropdownMenu.Item draggable="false"
-				class="flex gap-2 items-center h-[1.6875rem] px-2 text-[13px] font-normal  cursor-pointer dark:hover:bg-gray-800 rounded-xl"
+				class="flex gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal  cursor-pointer dark:hover:bg-gray-800 rounded-xl"
 				on:click={async () => {
 					await showSettings.set(!$showSettings);
 				}}
@@ -323,7 +322,7 @@
 			{#if scrollToTop}
 				<button
 					draggable="false"
-					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 					on:click={() => {
 						scrollToTop();
 					}}
@@ -351,7 +350,7 @@
 			{#if ($artifactContents ?? []).length > 0}
 				<button
 					draggable="false"
-					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 					id="chat-artifacts-button"
 					on:click={async () => {
 						await showControls.set(true);
@@ -369,7 +368,7 @@
 			{#if !readOnly && !$temporaryChatEnabled && ($user?.role === 'admin' || ($user.permissions?.chat?.share ?? true))}
 				<button
 					draggable="false"
-					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 					id="chat-share-button"
 					on:click={() => {
 						shareHandler();
@@ -385,7 +384,7 @@
 					<button
 						slot="trigger"
 						draggable="false"
-						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 					>
 						<Download className="size-3.5" strokeWidth="1.5" />
 
@@ -394,7 +393,7 @@
 
 					<button
 						draggable="false"
-						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
 							downloadJSONExport();
 						}}
@@ -404,7 +403,7 @@
 
 					<button
 						draggable="false"
-						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
 							downloadTxt();
 						}}
@@ -414,7 +413,7 @@
 
 					<button
 						draggable="false"
-						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
 							downloadPdf();
 						}}
@@ -426,7 +425,7 @@
 
 			<button
 				draggable="false"
-				class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+				class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 				id="chat-copy-button"
 				on:click={async () => {
 					const res = await copyToClipboard(await getChatAsText()).catch((e) => {
@@ -450,7 +449,7 @@
 						<button
 							slot="trigger"
 							draggable="false"
-							class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+							class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						>
 							<Folder className="size-3.5" strokeWidth="1.5" />
 
@@ -460,7 +459,7 @@
 							{#if folder?.id}
 								<button
 									draggable="false"
-									class="flex h-[1.6875rem] w-full items-center gap-2 overflow-hidden rounded-xl px-2 text-[13px] cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+									class="flex h-[1.6875rem] w-full items-center gap-2 overflow-hidden rounded-xl px-2 text-[0.8125rem] cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 									on:click={() => {
 										moveChatHandler(chat.id, folder.id);
 									}}
@@ -478,7 +477,7 @@
 
 				<button
 					draggable="false"
-					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 					on:click={() => {
 						archiveChatHandler();
 					}}
@@ -487,16 +486,18 @@
 					<div class="flex items-center">{$i18n.t('Archive')}</div>
 				</button>
 
-				<button
-					draggable="false"
-					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[13px] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-					on:click={() => {
-						deleteChatHandler();
-					}}
-				>
-					<GarbageBin className="size-3.5" strokeWidth="1.5" />
-					<div class="flex items-center">{$i18n.t('Delete')}</div>
-				</button>
+				{#if $user?.role === 'admin' || ($user?.permissions?.chat?.delete ?? true)}
+					<button
+						draggable="false"
+						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+						on:click={() => {
+							deleteChatHandler();
+						}}
+					>
+						<GarbageBin className="size-3.5" strokeWidth="1.5" />
+						<div class="flex items-center">{$i18n.t('Delete')}</div>
+					</button>
+				{/if}
 
 				<hr class="border-gray-50/30 dark:border-gray-800/30 mx-1 my-0.5" />
 

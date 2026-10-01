@@ -27,14 +27,13 @@
 
 	// Update the filteredPrompts if inputValue changes
 	// Only increase version if something wirklich geändert hat
-	$: getFilteredPrompts(inputValue);
+	$: if (fuse) getFilteredPrompts(inputValue);
 
-	// Helper function to check if arrays are the same
-	// (based on unique IDs oder content)
+	// Compare objects so translated text refreshes even when IDs stay the same.
 	function arraysEqual(a, b) {
 		if (a.length !== b.length) return false;
 		for (let i = 0; i < a.length; i++) {
-			if ((a[i].id ?? a[i].content) !== (b[i].id ?? b[i].content)) {
+			if (a[i] !== b[i]) {
 				return false;
 			}
 		}
@@ -60,7 +59,6 @@
 
 	$: if (suggestionPrompts) {
 		sortedPrompts = [...(suggestionPrompts ?? [])].sort(() => Math.random() - 0.5);
-		getFilteredPrompts(inputValue);
 	}
 </script>
 
@@ -76,6 +74,9 @@
 				? ' -mt-1'
 				: 'text-center items-center justify-center'}  self-start text-gray-600 dark:text-gray-400"
 		>
+			<!-- LICENSE covers this Open WebUI footer identifier.
+			Do not alter, remove, obscure, or replace it except as LICENSE permits:
+			https://docs.openwebui.com/license. -->
 			{$WEBUI_NAME} ‧ v{WEBUI_VERSION}
 		</div>
 	{/if}

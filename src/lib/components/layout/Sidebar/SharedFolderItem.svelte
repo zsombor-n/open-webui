@@ -92,13 +92,16 @@
 			</div>
 
 			{#if folder.owner_name}
-				<div class="shrink-0 text-[10px] text-gray-400 dark:text-gray-600 pr-1">
+				<div class="shrink-0 text-[0.625rem] text-gray-400 dark:text-gray-600 pr-1">
 					{folder.owner_name}
 				</div>
 			{/if}
 
 			{#if !isWritable}
-				<div class="shrink-0 text-[10px] text-gray-400 dark:text-gray-600" title="Read only">
+				<div
+					class="shrink-0 text-[0.625rem] text-gray-400 dark:text-gray-600"
+					title={$i18n.t('Read only')}
+				>
 					<Eye className="size-3" />
 				</div>
 			{/if}
@@ -108,7 +111,7 @@
 	{#if expanded}
 		<div class="pl-3">
 			{#if loading && !loaded}
-				<div class="flex gap-1 px-2 py-1.5" aria-label="Loading">
+				<div class="flex gap-1 px-2 py-1.5" aria-label={$i18n.t('Loading')}>
 					<span class="size-1 rounded-full bg-gray-400 animate-pulse dark:bg-gray-600"></span>
 					<span
 						class="size-1 rounded-full bg-gray-400 animate-pulse [animation-delay:150ms] dark:bg-gray-600"
@@ -138,12 +141,12 @@
 
 				{#if hasMoreChats}
 					<button
-						class="w-full px-2 py-0.5 text-left text-[11px] text-gray-400 transition hover:text-gray-700 disabled:cursor-not-allowed dark:text-gray-600 dark:hover:text-gray-300"
+						class="w-full px-2 py-0.5 text-left text-[0.6875rem] text-gray-400 transition hover:text-gray-700 disabled:cursor-not-allowed dark:text-gray-600 dark:hover:text-gray-300"
 						disabled={loading}
 						on:click={() => loadChats(true)}
 					>
 						{#if loading}
-							<div class="flex gap-1 px-2 py-1.5" aria-label="Loading">
+							<div class="flex gap-1 px-2 py-1.5" aria-label={$i18n.t('Loading')}>
 								<span class="size-1 rounded-full bg-gray-400 animate-pulse dark:bg-gray-600"></span>
 								<span
 									class="size-1 rounded-full bg-gray-400 animate-pulse [animation-delay:150ms] dark:bg-gray-600"
@@ -159,7 +162,7 @@
 				{/if}
 
 				{#if chats.length === 0 && children.length === 0 && !hasMoreChats}
-					<div class="text-[11px] text-gray-400 dark:text-gray-600 py-1 px-2">
+					<div class="text-[0.6875rem] text-gray-400 dark:text-gray-600 py-1 px-2">
 						{$i18n.t('Empty')}
 					</div>
 				{/if}

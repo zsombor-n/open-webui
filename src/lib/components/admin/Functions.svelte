@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolveLocalizedResource } from '$lib/utils/localizedContent';
 	import dayjs from 'dayjs';
 	import relativeTime from 'dayjs/plugin/relativeTime';
 	import { toast } from 'svelte-sonner';
@@ -116,6 +117,9 @@
 					(selectedType !== '' ? f.type === selectedType : true) &&
 					(query === '' ||
 						f.name.toLowerCase().includes(query.toLowerCase()) ||
+						resolveLocalizedResource(f, $i18n.language)
+							.toLowerCase()
+							.includes(query.toLowerCase()) ||
 						f.id.toLowerCase().includes(query.toLowerCase()) ||
 						(f.user?.name || '').toLowerCase().includes(query.toLowerCase()) ||
 						(f.user?.email || '').toLowerCase().includes(query.toLowerCase()) ||
@@ -157,6 +161,9 @@
 			return null;
 		});
 
+		// LICENSE covers this Open WebUI Community wordmark.
+		// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+		// https://docs.openwebui.com/license.
 		toast.success($i18n.t('Redirecting you to Open WebUI Community'));
 
 		const url = 'https://openwebui.com';
@@ -301,6 +308,9 @@
 </script>
 
 <svelte:head>
+	<!-- LICENSE covers this Open WebUI browser-title identifier.
+	Do not alter, remove, obscure, or replace it except as LICENSE permits:
+	https://docs.openwebui.com/license. -->
 	<title>
 		{$i18n.t('Functions')} / {$WEBUI_NAME}
 	</title>
@@ -507,22 +517,22 @@
 										<div class="flex min-w-0 items-center gap-2 overflow-hidden">
 											<div class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
 												<div
-													class="shrink-0 rounded-sm bg-gray-500/20 px-1 text-[10px] uppercase leading-4 text-gray-700 dark:text-gray-200"
+													class="shrink-0 rounded-sm bg-gray-500/20 px-1 text-[0.625rem] uppercase leading-4 text-gray-700 dark:text-gray-200"
 												>
 													{func.type}
 												</div>
 
 												<Tooltip content={func.id} className="min-w-0" placement="top-start">
 													<div
-														class="truncate text-[13px] leading-5 text-gray-800 group-hover:underline dark:text-gray-200"
+														class="truncate text-[0.8125rem] leading-5 text-gray-800 group-hover:underline dark:text-gray-200"
 													>
-														{func.name}
+														{resolveLocalizedResource(func, $i18n.language)}
 													</div>
 												</Tooltip>
 
 												{#if func?.meta?.manifest?.version}
 													<div
-														class="min-w-0 max-w-[40%] shrink-0 truncate text-[11px] leading-5 text-gray-500"
+														class="min-w-0 max-w-[40%] shrink-0 truncate text-[0.6875rem] leading-5 text-gray-500"
 													>
 														v{func?.meta?.manifest?.version ?? ''}
 													</div>
@@ -530,7 +540,7 @@
 
 												<Tooltip content={dayjs(func.updated_at * 1000).format('LLLL')}>
 													<div
-														class="shrink-0 truncate text-[11px] leading-5 text-gray-400 dark:text-gray-600"
+														class="shrink-0 truncate text-[0.6875rem] leading-5 text-gray-400 dark:text-gray-600"
 													>
 														{dayjs(func.updated_at * 1000).fromNow()}
 													</div>
@@ -538,16 +548,16 @@
 											</div>
 										</div>
 
-										{#if func?.meta?.description}
+										{#if resolveLocalizedResource(func, $i18n.language, 'description')}
 											<Tooltip
-												content={func?.meta?.description}
+												content={resolveLocalizedResource(func, $i18n.language, 'description')}
 												className="min-w-0"
 												placement="top-start"
 											>
 												<div
 													class="mt-0.5 truncate text-[0.6875rem] leading-4 text-gray-400 dark:text-gray-600"
 												>
-													{func?.meta?.description}
+													{resolveLocalizedResource(func, $i18n.language, 'description')}
 												</div>
 											</Tooltip>
 										{/if}
@@ -555,7 +565,7 @@
 								</div>
 
 								<div
-									class="hidden max-w-44 shrink-0 self-center truncate text-right text-[11px] leading-5 text-gray-500 dark:text-gray-500 md:block"
+									class="hidden max-w-44 shrink-0 self-center truncate text-right text-[0.6875rem] leading-5 text-gray-500 dark:text-gray-500 md:block"
 								>
 									<Tooltip
 										content={func?.user?.email ?? $i18n.t('Deleted User')}
@@ -748,7 +758,9 @@
 		}}
 	>
 		<div class=" text-sm text-gray-500 truncate">
-			{$i18n.t('This will delete')} <span class="  font-normal">{selectedFunction.name}</span>.
+			{$i18n.t('This will delete')}
+			<span class="  font-normal">{resolveLocalizedResource(selectedFunction, $i18n.language)}</span
+			>.
 		</div>
 	</DeleteConfirmDialog>
 
@@ -757,6 +769,7 @@
 		bind:show={showValvesModal}
 		type="function"
 		id={selectedFunction?.id ?? null}
+		meta={selectedFunction?.meta}
 		on:save={async () => {
 			await tick();
 			models.set(

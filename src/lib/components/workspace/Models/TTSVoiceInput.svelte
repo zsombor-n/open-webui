@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createEventDispatcher, tick } from 'svelte';
+	import { createEventDispatcher, getContext, tick } from 'svelte';
 
 	type Voice = {
 		id: string;
@@ -16,6 +16,8 @@
 	export let placeholder = '';
 	export let className = 'w-full';
 	export let selectedIds: string[] | null = null;
+
+	const i18n: any = getContext('i18n');
 
 	const dispatch = createEventDispatcher<{
 		select: Voice;
@@ -144,7 +146,7 @@
 			{#if matchedVoices.length > 0}
 				<button
 					type="button"
-					class="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-[5px] text-left text-xs text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800"
+					class="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-[0.3125rem] text-left text-xs text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800"
 					role="option"
 					on:mousedown={(event) => {
 						event.preventDefault();
@@ -153,14 +155,16 @@
 						enableVoices();
 					}}
 				>
-					<span class="truncate">Enable all ({matchedVoices.length})</span>
+					<span class="truncate"
+						>{$i18n.t('Enable all ({{COUNT}})', { COUNT: matchedVoices.length })}</span
+					>
 				</button>
 			{/if}
 		{/if}
 		{#each optionVoices as voice (voice.id)}
 			<button
 				type="button"
-				class="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-[5px] text-left text-xs text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800"
+				class="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-[0.3125rem] text-left text-xs text-gray-700 transition-colors hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800"
 				role="option"
 				aria-selected={selectedIds?.includes(voice.id) ?? value === voice.id}
 				on:mousedown={(event) => {

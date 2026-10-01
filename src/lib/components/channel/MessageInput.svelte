@@ -4,7 +4,7 @@
 
 	import { tick, getContext, onMount } from 'svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	import { config, mobile, settings, socket, user } from '$lib/stores';
 	import {
@@ -575,7 +575,8 @@
 					i18n,
 					triggerChar: '@',
 					modelSuggestions: true,
-					userSuggestions
+					userSuggestions,
+					channelId: channel?.id
 				})
 			},
 			...(channelSuggestions
@@ -629,7 +630,10 @@
 				command: ({ editor, range, props }) => {
 					// Convert the Unicode hex codepoint (e.g. "1F44B") to the actual emoji character (👋)
 					const codepoint = props.id;
-					const emoji = String.fromCodePoint(parseInt(codepoint, 16));
+					const emoji = codepoint
+						.split('-')
+						.map((cp) => String.fromCodePoint(parseInt(cp, 16)))
+						.join('');
 					editor.chain().focus().deleteRange(range).insertContent(emoji).run();
 				},
 				render: getSuggestionRenderer(CommandSuggestionList, {
@@ -809,7 +813,7 @@
 							{#if replyToMessage !== null}
 								<div class="px-3 pt-3 text-left w-full flex flex-col z-10">
 									<div class="flex items-center justify-between w-full">
-										<div class="pl-[1px] flex items-center gap-2 text-sm">
+										<div class="pl-[0.0625rem] flex items-center gap-2 text-sm">
 											<div class="translate-y-[0.5px]">
 												<span class=""
 													>{$i18n.t('Replying to {{NAME}}', {
@@ -850,7 +854,7 @@
 												</div>
 												<div class=" absolute -top-1 -right-1">
 													<button
-														class=" bg-white text-black border border-white rounded-full group-hover:visible invisible transition"
+														class=" bg-white text-black border border-white rounded-full hover-reveal transition"
 														type="button"
 														aria-label={$i18n.t('Remove file')}
 														on:click={() => {
@@ -996,7 +1000,7 @@
 													id="input-menu-button"
 													class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-[1.875rem] flex justify-center items-center outline-hidden focus:outline-hidden shrink-0"
 													type="button"
-													aria-label="More"
+													aria-label={$i18n.t('More')}
 												>
 													<svg
 														xmlns="http://www.w3.org/2000/svg"
@@ -1014,12 +1018,12 @@
 									</slot>
 								</div>
 
-								<div class="self-end flex space-x-1 mr-1 shrink-0 gap-[0.5px]">
+								<div class="self-end flex space-x-1 mr-1 shrink-0 gap-[0.03125rem]">
 									{#if content === ''}
 										<Tooltip content={$i18n.t('Record voice')}>
 											<button
 												id="voice-input-button"
-												class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-[5px] mr-0.5 self-center"
+												class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-[0.3125rem] mr-0.5 self-center"
 												type="button"
 												on:click={async () => {
 													try {
@@ -1047,7 +1051,7 @@
 														toast.error($i18n.t('Permission denied when accessing microphone'));
 													}
 												}}
-												aria-label="Voice Input"
+												aria-label={$i18n.t('Voice Input')}
 											>
 												<svg
 													xmlns="http://www.w3.org/2000/svg"
@@ -1070,7 +1074,7 @@
 												<Tooltip content={$i18n.t('Stop')}>
 													<button
 														aria-label={$i18n.t('Stop')}
-														class="bg-white hover:bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-800 transition rounded-full p-[5px]"
+														class="bg-white hover:bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-800 transition rounded-full p-[0.3125rem]"
 														on:click={() => {
 															onStop();
 														}}
@@ -1098,7 +1102,7 @@
 														aria-label={$i18n.t('Send message')}
 														class="{content !== '' || files.length !== 0
 															? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
-															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-[5px] self-center"
+															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-[0.3125rem] self-center"
 														type="submit"
 														disabled={content === '' && files.length === 0}
 													>

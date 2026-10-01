@@ -70,14 +70,15 @@ from open_webui.utils.auth import (
     get_password_hash,
     get_verified_user,
     invalidate_token,
+    revoke_user_tokens,
     validate_password,
     verify_password,
 )
 from open_webui.utils.groups import apply_default_group_assignment
+from open_webui.utils.json_codec import JSONCodec
 from open_webui.utils.misc import parse_duration, validate_email_format
 from open_webui.utils.rate_limit import RateLimiter
-from open_webui.utils.redis import get_redis_client
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictStr, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -87,12 +88,11 @@ log = logging.getLogger(__name__)
 
 # Forgive us our failed attempts, as we forgive those
 # who exceed their allotted rate against this gate.
-signin_rate_limiter = RateLimiter(redis_client=get_redis_client(), limit=5 * 3, window=60 * 3)
+signin_rate_limiter = RateLimiter(limit=5 * 3, window=60 * 3)
 # Best-effort throttle only: there is no caller identity before the provider answers,
 # and deployments may derive request.client from proxy headers.
 token_exchange_rate_limiter = (
     RateLimiter(
-        redis_client=get_redis_client(),
         limit=OAUTH_TOKEN_EXCHANGE_RATE_LIMIT,
         window=OAUTH_TOKEN_EXCHANGE_RATE_LIMIT_WINDOW,
     )
@@ -105,12 +105,15 @@ ADMIN_CONFIG_KEYS = {
     'SHOW_ADMIN_DETAILS': 'auth.admin.show',
     'ADMIN_EMAIL': 'auth.admin.email',
     'WEBUI_URL': 'webui.url',
+    'ENABLE_LOGIN_FORM': 'ui.enable_login_form',
     'ENABLE_SIGNUP': 'ui.enable_signup',
     'ENABLE_API_KEYS': 'auth.enable_api_keys',
     'ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS': 'auth.api_key.endpoint_restrictions',
     'API_KEYS_ALLOWED_ENDPOINTS': 'auth.api_key.allowed_endpoints',
     'DEFAULT_USER_ROLE': 'ui.default_user_role',
     'DEFAULT_GROUP_ID': 'ui.default_group_id',
+    'DEFAULT_INTERFACE_SETTINGS': 'ui.default_interface_settings',
+    'I18N': 'ui.i18n',
     'JWT_EXPIRES_IN': 'auth.jwt_expiry',
     'ENABLE_COMMUNITY_SHARING': 'ui.enable_community_sharing',
     'ENABLE_MESSAGE_RATING': 'ui.enable_message_rating',
@@ -405,6 +408,7 @@ async def update_password(
             hashed = await get_password_hash(form_data.new_password)
             success = await Auths.update_user_password_by_id(user.id, hashed, db=db)
             if success:
+                await revoke_user_tokens(request, user.id)
                 await publish_event(
                     request,
                     EVENTS.AUTH_PASSWORD_CHANGED,
@@ -548,8 +552,8 @@ async def ldap_auth(
         ]
         if ENABLE_LDAP_GROUP_MANAGEMENT:
             search_attributes.append(f'{LDAP_ATTRIBUTE_FOR_GROUPS}')
-            log.info(f'LDAP Group Management enabled. Adding {LDAP_ATTRIBUTE_FOR_GROUPS} to search attributes')
-        log.info(f'LDAP search attributes: {search_attributes}')
+            log.info('LDAP Group Management enabled. Adding %s to search attributes', LDAP_ATTRIBUTE_FOR_GROUPS)
+        log.info('LDAP search attributes: %s', search_attributes)
 
         search_success = await asyncio.to_thread(
             connection_app.search,
@@ -586,30 +590,30 @@ async def ldap_auth(
         user_groups = []
         if ENABLE_LDAP_GROUP_MANAGEMENT and LDAP_ATTRIBUTE_FOR_GROUPS in entry:
             group_dns = entry[LDAP_ATTRIBUTE_FOR_GROUPS]
-            log.info(f'LDAP raw group DNs for user {username_list}: {group_dns}')
+            log.info('LDAP raw group DNs for user %s: %s', username_list, group_dns)
 
             if group_dns:
-                log.info(f'LDAP group_dns original: {group_dns}')
-                log.info(f'LDAP group_dns type: {type(group_dns)}')
-                log.info(f'LDAP group_dns length: {len(group_dns)}')
+                log.info('LDAP group_dns original: %s', group_dns)
+                log.info('LDAP group_dns type: %s', type(group_dns))
+                log.info('LDAP group_dns length: %s', len(group_dns))
 
                 if hasattr(group_dns, 'value'):
                     group_dns = group_dns.value
-                    log.info(f'Extracted .value property: {group_dns}')
+                    log.info('Extracted .value property: %s', group_dns)
                 elif hasattr(group_dns, '__iter__') and not isinstance(group_dns, (str, bytes)):
                     group_dns = list(group_dns)
-                    log.info(f'Converted to list: {group_dns}')
+                    log.info('Converted to list: %s', group_dns)
 
                 if isinstance(group_dns, list):
                     group_dns = [str(item) for item in group_dns]
                 else:
                     group_dns = [str(group_dns)]
 
-                log.info(f'LDAP group_dns after processing - type: {type(group_dns)}, length: {len(group_dns)}')
+                log.info('LDAP group_dns after processing - type: %s, length: %s', type(group_dns), len(group_dns))
 
                 for group_idx, group_dn in enumerate(group_dns):
                     group_dn = str(group_dn)
-                    log.info(f'Processing group DN #{group_idx + 1}: {group_dn}')
+                    log.info('Processing group DN #%s: %s', group_idx + 1, group_dn)
 
                     try:
                         group_cn = extract_group_cn_from_dn(group_dn)
@@ -621,9 +625,9 @@ async def ldap_auth(
                     except Exception as e:
                         log.warning(f'Failed to extract group name from DN {group_dn}: {e}')
 
-                log.info(f'LDAP groups for user {username_list}: {user_groups} (total: {len(user_groups)})')
+                log.info('LDAP groups for user %s: %s (total: %s)', username_list, user_groups, len(user_groups))
             else:
-                log.info(f'No groups found for user {username_list}')
+                log.info('No groups found for user %s', username_list)
         elif ENABLE_LDAP_GROUP_MANAGEMENT:
             log.warning(
                 f'LDAP Group Management enabled but {LDAP_ATTRIBUTE_FOR_GROUPS} attribute not found in user entry'
@@ -691,7 +695,7 @@ async def ldap_auth(
                         if ENABLE_LDAP_GROUP_CREATION:
                             await Groups.create_groups_by_group_names(user.id, user_groups, db=db)
                         await Groups.sync_groups_by_group_names(user.id, user_groups, db=db)
-                        log.info(f'Successfully synced groups for user {user.id}: {user_groups}')
+                        log.info('Successfully synced groups for user %s: %s', user.id, user_groups)
                     except Exception as e:
                         log.error(f'Failed to sync groups for user {user.id}: {e}')
 
@@ -767,7 +771,17 @@ async def signin(
                 trusted_role = request.headers.get(WEBUI_AUTH_TRUSTED_ROLE_HEADER, '').lower().strip()
                 if trusted_role in {'admin', 'user', 'pending'}:
                     if user.role != trusted_role:
-                        await Users.update_user_role_by_id(user.id, trusted_role, db=db)
+                        updated_user = await Users.update_user_role_by_id(user.id, trusted_role, db=db)
+                        if updated_user:
+                            user = updated_user
+                            await publish_event(
+                                request,
+                                EVENTS.USER_ROLE_UPDATED,
+                                actor=updated_user,
+                                subject_id=updated_user.id,
+                                source='trusted_header',
+                                data={'role': updated_user.role},
+                            )
                 elif trusted_role:
                     log.warning(f'Ignoring invalid trusted role header value: {trusted_role}')
 
@@ -801,7 +815,7 @@ async def signin(
                 db=db,
             )
     else:
-        if signin_rate_limiter.is_limited(form_data.email.lower()):
+        if await signin_rate_limiter.is_limited(request.app.state.redis, form_data.email.lower()):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=ERROR_MESSAGES.RATE_LIMIT_EXCEEDED,
@@ -950,6 +964,9 @@ async def signout(request: Request, response: Response, db: AsyncSession = Depen
     if token is None:
         token = request.cookies.get('token')
 
+    oauth_session_id = request.cookies.get('oauth_session_id')
+    session = await OAuthSessions.get_session_by_id(oauth_session_id, db=db) if oauth_session_id else None
+
     if token:
         actor = None
         data = decode_token(token)
@@ -962,17 +979,20 @@ async def signout(request: Request, response: Response, db: AsyncSession = Depen
             actor=actor,
             subject_id=actor.id if actor else None,
             subject_type='user' if actor else None,
+            **({'source': 'oauth', 'data': {'auth_method': 'oauth', 'provider': session.provider}} if session else {}),
         )
 
     response.delete_cookie('token')
+    try:
+        request.session.clear()
+    except Exception:
+        pass
+    response.delete_cookie('owui-session')
     response.delete_cookie('oui-session')
     response.delete_cookie('oauth_id_token')
 
-    oauth_session_id = request.cookies.get('oauth_session_id')
     if oauth_session_id:
         response.delete_cookie('oauth_session_id')
-
-        session = await OAuthSessions.get_session_by_id(oauth_session_id, db=db)
 
         # If a custom end_session_endpoint is configured (e.g. AWS Cognito), redirect
         # there directly instead of attempting OIDC discovery.
@@ -1156,7 +1176,7 @@ async def get_admin_details(
         admin_email = await Config.get('auth.admin.email')
         admin_name = None
 
-        log.info(f'Admin details - Email: {admin_email}, Name: {admin_name}')
+        log.info('Admin details - Email: %s, Name: %s', admin_email, admin_name)
 
         if admin_email:
             admin = await Users.get_user_by_email(admin_email, db=db)
@@ -1190,12 +1210,15 @@ class AdminConfig(BaseModel):
     SHOW_ADMIN_DETAILS: bool
     ADMIN_EMAIL: str | None = None
     WEBUI_URL: str
+    ENABLE_LOGIN_FORM: bool = True
     ENABLE_SIGNUP: bool
     ENABLE_API_KEYS: bool
     ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS: bool
     API_KEYS_ALLOWED_ENDPOINTS: str
     DEFAULT_USER_ROLE: str
     DEFAULT_GROUP_ID: str
+    DEFAULT_INTERFACE_SETTINGS: dict | None = None
+    I18N: dict[str, dict[str, StrictStr]] | None = None
     JWT_EXPIRES_IN: str
     ENABLE_COMMUNITY_SHARING: bool
     ENABLE_MESSAGE_RATING: bool
@@ -1216,10 +1239,41 @@ class AdminConfig(BaseModel):
     PENDING_USER_OVERLAY_CONTENT: str | None = None
     RESPONSE_WATERMARK: str | None = None
 
+    @field_validator('I18N')
+    @classmethod
+    def validate_i18n(cls, value):
+        if value is None:
+            raise ValueError('I18N must be a dictionary')
+        unsafe_keys = {'__proto__', 'prototype', 'constructor'}
+
+        def placeholders(text):
+            return {match.strip() for match in re.findall(r'\{\{\s*-?\s*([^},]+)(?:,[^}]+)?\s*\}\}', text)}
+
+        cleaned = {}
+        for locale, entries in value.items():
+            if not locale.strip() or locale in unsafe_keys:
+                raise ValueError(f'Invalid language: {locale}')
+            translations = {}
+            for key, text in entries.items():
+                if not key.strip() or key in unsafe_keys:
+                    raise ValueError(f'Invalid translation key: {key}')
+                if text.strip():
+                    if placeholders(key) != placeholders(text):
+                        raise ValueError(f'Interpolation placeholders do not match: {locale}: {key}')
+                    translations[key] = text
+            if translations:
+                cleaned[locale] = translations
+        return cleaned
+
 
 @router.post('/admin/config')
 async def update_admin_config(request: Request, form_data: AdminConfig, user=Depends(get_admin_user)):
     updates = config_updates(form_data.model_dump(), ADMIN_CONFIG_KEYS)
+    if 'ENABLE_LOGIN_FORM' not in form_data.model_fields_set:
+        updates.pop('ui.enable_login_form', None)
+    if 'I18N' not in form_data.model_fields_set:
+        updates.pop('ui.i18n', None)
+    updates['ui.default_interface_settings'] = form_data.DEFAULT_INTERFACE_SETTINGS or {}
     updates['folders.max_file_count'] = int(form_data.FOLDER_MAX_FILE_COUNT) if form_data.FOLDER_MAX_FILE_COUNT else ''
     updates['automations.max_count'] = int(form_data.AUTOMATION_MAX_COUNT) if form_data.AUTOMATION_MAX_COUNT else ''
     updates['automations.min_interval'] = (
@@ -1410,6 +1464,9 @@ OAUTH_CONFIG_KEYS = {
 
 
 def _format_oauth_form_value(field: str, value):
+    if field == 'OAUTH_BLOCKED_GROUPS' and isinstance(value, list):
+        # Preserve commas in group names and regex patterns when the form is saved.
+        return JSONCodec.dumps(value)
     if field in OAUTH_COMMA_LIST_FIELDS and isinstance(value, list):
         return ','.join(str(item) for item in value)
     return value
@@ -1425,11 +1482,13 @@ def _parse_oauth_update_value(field: str, value):
 
 async def get_oauth_config_values() -> dict:
     values = await Config.get_many(*OAUTH_CONFIG_KEYS.values())
-    return {
+    form_values = {
         field: _format_oauth_form_value(field, values[storage_key])
         for field, storage_key in OAUTH_CONFIG_KEYS.items()
         if storage_key in values
     }
+    form_values['ENABLE_OAUTH_PERSISTENT_CONFIG'] = Config.OAUTH_PERSISTENT_ENABLED
+    return form_values
 
 
 def oauth_config_updates(data: dict) -> dict:
@@ -1440,12 +1499,16 @@ def oauth_config_updates(data: dict) -> dict:
     }
 
 
-@router.get('/admin/config/oauth', response_model=OAuthConfigForm)
+class OAuthConfigResponse(OAuthConfigForm):
+    ENABLE_OAUTH_PERSISTENT_CONFIG: bool
+
+
+@router.get('/admin/config/oauth', response_model=OAuthConfigResponse)
 async def get_oauth_config(request: Request, user=Depends(get_admin_user)):
     return await get_oauth_config_values()
 
 
-@router.post('/admin/config/oauth', response_model=OAuthConfigForm)
+@router.post('/admin/config/oauth', response_model=OAuthConfigResponse)
 async def update_oauth_config(request: Request, form_data: OAuthConfigForm, user=Depends(get_admin_user)):
     await Config.upsert(oauth_config_updates(form_data.model_dump(exclude_none=True)))
     return await get_oauth_config_values()
@@ -1576,8 +1639,8 @@ async def token_exchange(
             detail='Token exchange is disabled',
         )
 
-    if token_exchange_rate_limiter and token_exchange_rate_limiter.is_limited(
-        request.client.host if request.client else 'unknown'
+    if token_exchange_rate_limiter and await token_exchange_rate_limiter.is_limited(
+        request.app.state.redis, request.client.host if request.client else 'unknown'
     ):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1644,6 +1707,7 @@ async def token_exchange(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token missing required 'sub' claim",
         )
+    sub = str(sub)
 
     email = user_data.get(email_claim, '')
     if not email:
@@ -1673,12 +1737,35 @@ async def token_exchange(
         user = await Users.get_user_by_email(email, db=db)
         if user:
             # Link the OAuth sub to this user
-            await Users.update_user_oauth_by_id(user.id, provider, sub, db=db)
+            user = await Users.update_user_oauth_by_id(user.id, provider, sub, db=db) or user
+
+    if user:
+        provider_oauth = (user.oauth or {}).get(provider) if isinstance(user.oauth, dict) else None
+        # Lazy repair for legacy rows that stored numeric provider ids as JSON numbers.
+        if isinstance(provider_oauth, dict) and provider_oauth.get('sub') != sub:
+            user = await Users.update_user_oauth_by_id(user.id, provider, sub, db=db) or user
 
     if not user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail='User not found. Please sign in via the web interface first.',
+        )
+
+    user = await oauth_manager.update_user_role_from_oauth(
+        request=request,
+        user=user,
+        user_data=user_data,
+        provider=provider,
+        access_token=form_data.token,
+        db=db,
+    )
+    if await Config.get('oauth.enable_group_mapping'):
+        await oauth_manager.update_user_groups(
+            request=request,
+            user=user,
+            user_data=user_data,
+            default_permissions=await Config.get('user.permissions'),
+            db=db,
         )
 
     return await create_session_response(request, user, db, source='oauth')

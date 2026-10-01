@@ -7,6 +7,10 @@
 	import { models } from '$lib/stores';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import {
+		resolveLocalizedModelDescription,
+		resolveLocalizedModelName
+	} from '$lib/utils/localizedContent';
 
 	const i18n = getContext('i18n');
 
@@ -22,9 +26,9 @@
 			.map((model) => {
 				const _item = {
 					...model,
-					modelName: model?.name,
+					modelName: resolveLocalizedModelName(model, $i18n.language),
 					tags: model?.info?.meta?.tags?.map((tag) => tag.name).join(' '),
-					desc: model?.info?.meta?.description
+					desc: resolveLocalizedModelDescription(model, $i18n.language)
 				};
 				return _item;
 			}),
@@ -60,7 +64,7 @@
 	};
 </script>
 
-<div class="px-2 py-1 text-[11px] text-gray-500 dark:text-gray-400">
+<div class="px-2 py-1 text-[0.6875rem] text-gray-500 dark:text-gray-400">
 	{$i18n.t('Models')}
 </div>
 
@@ -68,7 +72,7 @@
 	{#each filteredItems as model, modelIdx}
 		<Tooltip content={model.id} placement="top-start">
 			<button
-				class="flex h-[1.6875rem] w-full items-center rounded-xl px-2 text-left text-[13px] hover:bg-gray-50/40 dark:hover:bg-gray-800/40 {modelIdx ===
+				class="flex h-[1.6875rem] w-full items-center rounded-xl px-2 text-left text-[0.8125rem] hover:bg-gray-50/40 dark:hover:bg-gray-800/40 {modelIdx ===
 				selectedIdx
 					? 'bg-gray-50/40 dark:bg-gray-800/40 selected-command-option-button'
 					: ''}"
@@ -85,14 +89,17 @@
 				<div class="flex min-w-0 items-center text-black dark:text-gray-100">
 					<img
 						src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model.id}&lang=${$i18n.language}`}
-						alt={model?.name ?? model.id}
+						alt={resolveLocalizedModelName(model, $i18n.language) ?? model.id}
 						class="mr-2 size-4.5 rounded-full object-cover"
 						on:error={(e) => {
+							// LICENSE covers this Open WebUI fallback logo.
+							// Do not alter, remove, obscure, or replace it except as LICENSE permits:
+							// https://docs.openwebui.com/license.
 							e.currentTarget.src = '/favicon.png';
 						}}
 					/>
 					<div class="min-w-0 truncate">
-						{model.name}
+						{resolveLocalizedModelName(model, $i18n.language)}
 					</div>
 				</div>
 			</button>

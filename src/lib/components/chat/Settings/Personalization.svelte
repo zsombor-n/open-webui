@@ -9,6 +9,7 @@
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
 	import DropdownMenu from '$lib/components/common/DropdownMenu.svelte';
+	import ExperimentalBadge from '$lib/components/common/ExperimentalBadge.svelte';
 	import MemoryModal from './Personalization/MemoryModal.svelte';
 	import { deleteMemoriesByUserId, deleteMemoryById, getMemories } from '$lib/apis/memories';
 	import { toast } from 'svelte-sonner';
@@ -109,31 +110,26 @@
 	}}
 >
 	<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
-		{$i18n.t('Personalization')}
+		{$i18n.t('settings.personal.personalization.title')}
 	</h2>
 
 	<div class="flex-1 min-h-0 overflow-y-auto scrollbar-hover pr-1.5">
-		<UserSettingSection title={$i18n.t('Memory')} first>
+		<UserSettingSection
+			title={$i18n.t('settings.personal.personalization.sections.memory.title')}
+			first
+		>
 			<UserSettingRow
 				description={$i18n
-					.t(
-						"You can personalize your interactions with LLMs by adding memories through the 'Manage' button below, making them more helpful and tailored to you."
-					)
-					.replace($i18n.t('Manage'), $i18n.t('Add Memory'))}
-			>
-				<Tooltip
-					slot="label"
-					content={$i18n.t(
-						'This is an experimental feature, it may not function as expected and is subject to change at any time.'
+					.t('settings.personal.personalization.memory.description')
+					.replace(
+						$i18n.t('settings.personal.personalization.manageMemories.label'),
+						$i18n.t('Add Memory')
 					)}
-				>
-					<div class="flex items-center gap-2">
-						{$i18n.t('Memory')}
-						<span class="text-[0.625rem] uppercase text-gray-400 dark:text-gray-600"
-							>{$i18n.t('Experimental')}</span
-						>
-					</div>
-				</Tooltip>
+			>
+				<div slot="label" class="flex items-center gap-2">
+					{$i18n.t('settings.personal.personalization.memory.label')}
+					<ExperimentalBadge />
+				</div>
 
 				<Switch
 					bind:state={enableMemory}
@@ -147,7 +143,7 @@
 				<div>
 					<div class="mb-1 flex items-center">
 						<div class="text-xs text-gray-600 dark:text-gray-400">
-							{$i18n.t('Saved Memories')}
+							{$i18n.t('settings.personal.personalization.savedMemories.label')}
 							{#if !loadingMemories}
 								<span class="ml-1 text-gray-400 dark:text-gray-600">{memories.length}</span>
 							{/if}
@@ -201,7 +197,7 @@
 								</Tooltip>
 
 								<div slot="content">
-									<DropdownMenu className="w-[170px] shadow-sm">
+									<DropdownMenu className="w-[10.625rem] shadow-sm">
 										<button
 											class="flex h-[1.6875rem] w-full cursor-pointer select-none items-center gap-2 rounded-lg bg-transparent px-2 text-xs hover:text-gray-900 disabled:cursor-default disabled:opacity-30 dark:hover:text-gray-100"
 											type="button"
@@ -223,7 +219,9 @@
 											}}
 										>
 											<Trash className="size-3.5 shrink-0" strokeWidth="1.5" />
-											<div class="min-w-0 flex-1 truncate text-left">{$i18n.t('Clear memory')}</div>
+											<div class="min-w-0 flex-1 truncate text-left">
+												{$i18n.t('settings.personal.personalization.clearMemory.label')}
+											</div>
 										</button>
 									</DropdownMenu>
 								</div>
@@ -233,7 +231,7 @@
 						{#if sortedMemories.length === 0}
 							<div class="min-h-16 text-[0.6875rem] text-gray-400 dark:text-gray-600">
 								{#if memories.length === 0}
-									{$i18n.t('Memories accessible by LLMs will be shown here.')}
+									{$i18n.t('settings.personal.personalization.noResultsFound.description')}
 								{:else}
 									{$i18n.t('No results found')}
 								{/if}

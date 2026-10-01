@@ -181,9 +181,15 @@
 		}
 
 		try {
-			await setProductionPromptVersion(localStorage.token, prompt.id, historyEntry.id);
+			const res = await setProductionPromptVersion(localStorage.token, prompt.id, historyEntry.id);
 			// Update local prompt object to trigger reactivity
-			prompt = { ...prompt, version_id: historyEntry.id };
+			prompt = { ...prompt, ...(res ?? {}), version_id: historyEntry.id };
+
+			name = prompt.name || '';
+			content = prompt.content ?? '';
+			tags = (prompt.tags || []).map((tag) => ({ name: tag }));
+			originalName = name;
+			originalTags = tags;
 			toast.success($i18n.t('Production version updated'));
 		} catch (error) {
 			toast.error(`${error}`);
@@ -293,6 +299,7 @@
 	share={$user?.permissions?.sharing?.prompts || $user?.role === 'admin'}
 	sharePublic={$user?.permissions?.sharing?.public_prompts || $user?.role === 'admin'}
 	shareUsers={($user?.permissions?.access_grants?.allow_users ?? true) || $user?.role === 'admin'}
+	allowGroups={($user?.permissions?.access_grants?.allow_groups ?? true) || $user?.role === 'admin'}
 	onChange={async () => {
 		if (edit && prompt?.id) {
 			try {
@@ -532,7 +539,7 @@
 						class="h-full overflow-y-auto rounded-lg bg-gray-50/60 px-3 py-2 dark:bg-white/[0.03]"
 					>
 						<pre
-							class="whitespace-pre-wrap pr-8 font-mono text-[11px] leading-relaxed">{selectedHistoryEntry
+							class="whitespace-pre-wrap pr-8 font-mono text-[0.6875rem] leading-relaxed">{selectedHistoryEntry
 								?.snapshot?.content || content}</pre>
 					</div>
 				</div>

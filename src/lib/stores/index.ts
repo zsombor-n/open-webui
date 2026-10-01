@@ -1,9 +1,10 @@
 import { APP_NAME } from '$lib/constants';
-import { type Writable, writable } from 'svelte/store';
+import { type Writable, derived, writable } from 'svelte/store';
 import type { ModelConfig } from '$lib/apis';
 import type { Banner } from '$lib/types';
 import type { Socket } from 'socket.io-client';
 import type { AudioQueue } from '$lib/utils/audio';
+import type { I18nOverrides } from '$lib/utils/translationDictionary';
 
 import emojiShortCodes from '$lib/emoji-shortcodes.json';
 
@@ -68,7 +69,8 @@ export const models: Writable<Model[]> = writable([]);
 
 export const knowledge: Writable<null | Document[]> = writable(null);
 export const tools = writable(null);
-export const skills = writable(null);
+export const skills: Writable<null | any[]> = writable(null);
+export const terminalSkills: Writable<any[]> = writable([]);
 export const functions = writable(null);
 
 export type WorkspaceSection = 'models' | 'knowledge' | 'prompts' | 'skills' | 'tools';
@@ -103,6 +105,20 @@ export const banners: Writable<Banner[]> = writable([]);
 
 export const settings: Writable<Settings> = writable({});
 
+// Users who never pinned a model follow the admin default, so changes to it keep reaching them
+export const pinnedModels = derived([settings, config], ([$settings, $config]) =>
+	$settings?.pinnedModels === undefined
+		? ($config?.default_pinned_models ?? '').split(',').filter((id) => id)
+		: $settings.pinnedModels
+);
+
+// Pins for models the user cannot see are kept in their settings but left out of the sidebar
+export const visiblePinnedModels = derived([pinnedModels, models], ([$pinnedModels, $models]) =>
+	$pinnedModels.filter((id) =>
+		$models.some((model) => model.id === id && !model.info?.meta?.hidden)
+	)
+);
+
 export const audioQueue = writable<AudioQueue | null>(null);
 export const chatRequestQueues: Writable<
 	Record<string, { id: string; prompt: string; files: any[] }[]>
@@ -126,9 +142,13 @@ export const showOverview = writable(false);
 export const showArtifacts = writable(false);
 export const showCallOverlay = writable(false);
 export const showFileNav = writable(false);
-export const showFileNavPath: Writable<string | null> = writable(null);
+export type FileNavOpenRequest = string | { path: string; page?: number | null };
+export const showFileNavPath: Writable<FileNavOpenRequest | null> = writable(null);
 export const showFileNavDir: Writable<string | null> = writable(null);
 export const selectedTerminalId: Writable<string | null> = writable(null);
+export const connectedUserTerminals = writable(
+	new Map<symbol, { terminalId: string; chatId: string }>()
+);
 
 export const artifactCode = writable(null);
 export const artifactContents = writable(null);
@@ -200,7 +220,7 @@ type OllamaModelDetails = {
 };
 
 type Settings = {
-	pinnedModels?: never[];
+	pinnedModels?: string[];
 	toolServers?: never[];
 	detectArtifacts?: boolean;
 	showUpdateToast?: boolean;
@@ -216,6 +236,7 @@ type Settings = {
 	imageCompression?: boolean;
 	imageCompressionSize?: any;
 	textScale?: number;
+	fontFamily?: string | null;
 	widescreenMode?: null;
 	largeTextAsFile?: boolean;
 	promptAutocomplete?: boolean;
@@ -229,13 +250,17 @@ type Settings = {
 	autoTags?: boolean;
 	autoFollowUps?: boolean;
 	splitLargeChunks?(body: any, splitLargeChunks: any): unknown;
-	backgroundImageUrl?: null;
+	backgroundImageUrl?: string | null;
 	landingPageMode?: string;
+	iframeSandboxAllowScripts?: boolean;
 	iframeSandboxAllowForms?: boolean;
 	iframeSandboxAllowSameOrigin?: boolean;
+	iframeSandboxAllowDownloads?: boolean;
+	terminalPreviewAllowSameOrigin?: boolean;
 	scrollOnBranchChange?: boolean;
 	scrollOnResponseGeneration?: boolean;
 	showFilesOnTerminalSelect?: boolean;
+	terminalFileDisplay?: 'sidebar' | 'inline';
 	directConnections?: null;
 	chatBubble?: boolean;
 	copyFormatted?: boolean;
@@ -253,6 +278,7 @@ type Settings = {
 	chatDirection?: 'LTR' | 'RTL' | 'auto';
 	ctrlEnterToSend?: boolean;
 	keyboardShortcuts?: boolean;
+	chatHoverPreview?: boolean;
 	renderMarkdownInPreviews?: boolean;
 	renderMarkdownInUserMessages?: boolean;
 	renderMarkdownInAssistantMessages?: boolean;
@@ -308,9 +334,13 @@ type Config = {
 	name: string;
 	version: string;
 	default_locale: string;
+	i18n?: I18nOverrides;
 	default_models: string;
-	default_prompt_suggestions: PromptSuggestion[];
+	default_pinned_models?: string | null;
+	default_prompt_suggestions: PromptSuggestion[] | null;
+	default_prompt_suggestions_i18n?: Record<string, { suggestion_prompts: PromptSuggestion[] }>;
 	features: {
+		slim?: boolean;
 		auth: boolean;
 		auth_trusted_header: boolean;
 		enable_api_keys: boolean;
@@ -326,14 +356,17 @@ type Config = {
 		enable_admin_chat_access: boolean;
 		enable_admin_analytics: boolean;
 		enable_context_compaction?: boolean;
+		enable_tool_permissions?: boolean;
 		enable_community_sharing: boolean;
 		enable_memories: boolean;
 		enable_plugins?: boolean;
 		enable_autocomplete_generation: boolean;
 		enable_direct_connections: boolean;
+		enable_direct_integrations?: boolean;
 		enable_version_update_check: boolean;
 		enable_pyodide_file_persistence?: boolean;
 		folder_max_file_count?: number;
+		websocket_heartbeat_interval?: number | null;
 	};
 	oauth: {
 		providers: {
@@ -342,8 +375,10 @@ type Config = {
 		auto_redirect?: boolean;
 	};
 	ui?: {
+		default_interface_settings?: Record<string, unknown>;
 		pending_user_overlay_title?: string;
 		pending_user_overlay_content?: string;
+		response_watermark?: string;
 		iframe_csp?: string;
 	};
 };

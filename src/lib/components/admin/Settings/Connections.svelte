@@ -14,6 +14,7 @@
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import ArrowPath from '$lib/components/icons/ArrowPath.svelte';
 	import Plus from '$lib/components/icons/Plus.svelte';
 
 	import OpenAIConnection from './Connections/OpenAIConnection.svelte';
@@ -50,6 +51,7 @@
 	let pipelineUrls: Record<string, boolean> = {};
 	let showAddOpenAIConnectionModal = false;
 	let showAddOllamaConnectionModal = false;
+	let modelListRefreshing = false;
 
 	const updateOpenAIHandler = async () => {
 		if (ENABLE_OPENAI_API !== null) {
@@ -117,6 +119,19 @@
 			toast.success($i18n.t('Connections settings updated'));
 			await models.set(await getModels());
 			await config.set(await getBackendConfig());
+		}
+	};
+
+	const refreshModelListHandler = async () => {
+		modelListRefreshing = true;
+
+		try {
+			await models.set(await getModels());
+			toast.success($i18n.t('Model list refreshed'));
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			modelListRefreshing = false;
 		}
 	};
 
@@ -218,12 +233,14 @@
 />
 
 <form class="flex h-full flex-col justify-between text-sm" on:submit|preventDefault={submitHandler}>
-	<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">{$i18n.t('Connections')}</h2>
+	<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
+		{$i18n.t('settings.admin.connections.title')}
+	</h2>
 
 	<div class="flex-1 min-h-0 overflow-y-auto scrollbar-hover pr-1.5">
 		{#if ENABLE_OPENAI_API !== null && ENABLE_OLLAMA_API !== null && connectionsConfig !== null}
 			<AdminSettingSection first>
-				<AdminSettingRow label={$i18n.t('OpenAI API')} let:labelId>
+				<AdminSettingRow label={$i18n.t('settings.admin.connections.openaiApi.label')} let:labelId>
 					<Switch
 						bind:state={ENABLE_OPENAI_API}
 						on:change={async () => {
@@ -237,10 +254,10 @@
 					<div>
 						<div class="mb-2 flex items-center justify-between gap-4">
 							<div class="text-xs text-gray-600 dark:text-gray-400">
-								{$i18n.t('Manage OpenAI API Connections')}
+								{$i18n.t('settings.admin.connections.manageOpenaiApiConnections.label')}
 							</div>
 
-							<Tooltip content={$i18n.t(`Add Connection`)}>
+							<Tooltip content={$i18n.t('settings.admin.connections.addConnection.label')}>
 								<button
 									class="flex size-6 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-700 dark:text-gray-600 dark:hover:bg-white/5 dark:hover:text-gray-300"
 									on:click={() => {
@@ -282,7 +299,7 @@
 					</div>
 				{/if}
 
-				<AdminSettingRow label={$i18n.t('Ollama API')} let:labelId>
+				<AdminSettingRow label={$i18n.t('settings.admin.connections.ollamaApi.label')} let:labelId>
 					<Switch
 						bind:state={ENABLE_OLLAMA_API}
 						on:change={async () => {
@@ -296,10 +313,10 @@
 					<div>
 						<div class="mb-2 flex items-center justify-between gap-4">
 							<div class="text-xs text-gray-600 dark:text-gray-400">
-								{$i18n.t('Manage Ollama API Connections')}
+								{$i18n.t('settings.admin.connections.manageOllamaApiConnections.label')}
 							</div>
 
-							<Tooltip content={$i18n.t(`Add Connection`)}>
+							<Tooltip content={$i18n.t('settings.admin.connections.addConnection.label')}>
 								<button
 									class="flex size-6 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-700 dark:text-gray-600 dark:hover:bg-white/5 dark:hover:text-gray-300"
 									on:click={() => {
@@ -336,7 +353,7 @@
 						</div>
 
 						<div class="mt-1 text-[0.6875rem] text-gray-400 dark:text-gray-600">
-							{$i18n.t('Trouble accessing Ollama?')}
+							{$i18n.t('settings.admin.connections.manageOllamaApiConnections.description')}
 							<a
 								class="font-normal underline hover:text-gray-700 dark:hover:text-gray-300"
 								href="https://github.com/open-webui/open-webui#troubleshooting"
@@ -349,12 +366,12 @@
 				{/if}
 			</AdminSettingSection>
 
-			<AdminSettingSection title={$i18n.t('User Connections')}>
+			<AdminSettingSection
+				title={$i18n.t('settings.admin.connections.sections.userConnections.title')}
+			>
 				<AdminSettingRow
-					label={$i18n.t('Direct Connections')}
-					description={$i18n.t(
-						'Direct Connections allow users to connect to their own OpenAI compatible API endpoints.'
-					)}
+					label={$i18n.t('settings.admin.connections.directConnections.label')}
+					description={$i18n.t('settings.admin.connections.directConnections.description')}
 					let:labelId
 				>
 					<Switch
@@ -367,19 +384,37 @@
 				</AdminSettingRow>
 
 				<AdminSettingRow
-					label={$i18n.t('Cache Base Model List')}
-					description={$i18n.t(
-						'Base Model List Cache speeds up access by fetching base models only at startup or on settings save—faster, but may not show recent base model changes.'
-					)}
+					label={$i18n.t('settings.admin.connections.cacheBaseModelList.label')}
+					description={$i18n.t('settings.admin.connections.cacheBaseModelList.description')}
 					let:labelId
 				>
-					<Switch
-						bind:state={connectionsConfig.ENABLE_BASE_MODELS_CACHE}
-						on:change={async () => {
-							updateConnectionsHandler();
-						}}
-						ariaLabelledbyId={labelId}
-					/>
+					<div class="flex items-center gap-1.5">
+						{#if connectionsConfig.ENABLE_BASE_MODELS_CACHE}
+							<Tooltip content={$i18n.t('settings.admin.connections.refreshModels.label')}>
+								<button
+									class="flex size-6 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-600 dark:hover:bg-white/5 dark:hover:text-gray-300"
+									type="button"
+									disabled={modelListRefreshing}
+									on:click={refreshModelListHandler}
+									aria-label={$i18n.t('settings.admin.connections.refreshModels.label')}
+								>
+									{#if modelListRefreshing}
+										<Spinner className="size-3.5" />
+									{:else}
+										<ArrowPath className="size-4" />
+									{/if}
+								</button>
+							</Tooltip>
+						{/if}
+
+						<Switch
+							bind:state={connectionsConfig.ENABLE_BASE_MODELS_CACHE}
+							on:change={async () => {
+								updateConnectionsHandler();
+							}}
+							ariaLabelledbyId={labelId}
+						/>
+					</div>
 				</AdminSettingRow>
 			</AdminSettingSection>
 		{:else}

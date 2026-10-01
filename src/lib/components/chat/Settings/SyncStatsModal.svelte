@@ -6,6 +6,7 @@
 	import { exportChatStats, exportSingleChatStats, downloadChatStats } from '$lib/apis/chats';
 	import { getVersion } from '$lib/apis';
 	import { settings } from '$lib/stores';
+	import { COMMUNITY_ORIGINS } from '$lib/constants';
 
 	import Modal from '$lib/components/common/Modal.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -19,6 +20,10 @@
 
 	// Listen for verify:chat messages from opener
 	const handleMessage = async (event: MessageEvent) => {
+		if (!COMMUNITY_ORIGINS.includes(event.origin)) {
+			return;
+		}
+
 		// Community sends: { type: 'verify:chat', data: { id: ... } }
 		const chatId = event.data?.data?.id ?? event.data?.id;
 		if (event.data?.type === 'verify:chat' && chatId) {
@@ -32,7 +37,7 @@
 							chatId: chatId,
 							requestId: event.data.requestId ?? null
 						},
-						'*'
+						event.origin
 					);
 				}
 			} catch (err: any) {
@@ -45,7 +50,7 @@
 							chatId: chatId,
 							requestId: event.data.requestId ?? null
 						},
-						'*'
+						event.origin
 					);
 				}
 			}
@@ -89,7 +94,10 @@
 	// Helper to send postMessage to opener
 	const postToOpener = (message: object) => {
 		if (window.opener) {
-			window.opener.postMessage({ ...message, requestId: eventData?.requestId ?? null }, '*');
+			const payload = { ...message, requestId: eventData?.requestId ?? null };
+			for (const origin of COMMUNITY_ORIGINS) {
+				window.opener.postMessage(payload, origin);
+			}
 		}
 	};
 
@@ -371,10 +379,16 @@
 
 			<div class="px-5 pt-2 pb-5">
 				<div class="text-sm text-gray-500 dark:text-gray-400">
+					<!-- LICENSE covers this Open WebUI Community wordmark.
+					Do not alter, remove, obscure, or replace it except as LICENSE permits:
+					https://docs.openwebui.com/license. -->
 					{$i18n.t('Do you want to sync your usage stats with Open WebUI Community?')}
 				</div>
 
 				<div class="mt-2 text-xs text-gray-500">
+					<!-- LICENSE covers this Open WebUI wordmark.
+					Do not alter, remove, obscure, or replace it except as LICENSE permits:
+					https://docs.openwebui.com/license. -->
 					{$i18n.t(
 						'Participate in community leaderboards and evaluations! Syncing aggregated usage stats helps drive research and improvements to Open WebUI. Your privacy is paramount: no message content is ever shared.'
 					)}
@@ -385,6 +399,9 @@
 						{$i18n.t('What is shared:')}
 					</div>
 					<ul class="list-disc list-inside space-y-0.5 ml-1 mb-2">
+						<!-- LICENSE covers this Open WebUI wordmark.
+						Do not alter, remove, obscure, or replace it except as LICENSE permits:
+						https://docs.openwebui.com/license. -->
 						<li>{$i18n.t('Open WebUI version')}</li>
 						<li>{$i18n.t('Model names and usage frequency')}</li>
 						<li>{$i18n.t('Message counts and response timestamps')}</li>

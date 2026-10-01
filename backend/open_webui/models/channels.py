@@ -1,4 +1,3 @@
-import json
 import secrets
 import time
 import uuid
@@ -10,7 +9,8 @@ from open_webui.models.access_grants import (
     AccessGrants,
 )
 from open_webui.models.groups import Groups
-from open_webui.utils.validate import validate_profile_image_url
+from open_webui.models.users import User
+from open_webui.utils.validate import validate_image_url
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import (
     JSON,
@@ -253,7 +253,7 @@ class ChannelWebhookForm(BaseModel):
     def check_profile_image_url(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return v
-        return validate_profile_image_url(v)
+        return validate_image_url(v)
 
 
 class ChannelTable:
@@ -438,17 +438,17 @@ class ChannelTable:
 
             match_count = func.sum(
                 case(
-                    (ChannelMember.user_id.in_(unique_user_ids), 1),
+                    (User.id.in_(unique_user_ids), 1),
                     else_=0,
                 )
             )
 
             subquery = (
                 select(ChannelMember.channel_id)
+                .join(User, User.id == ChannelMember.user_id)
                 .group_by(ChannelMember.channel_id)
-                # 1. Channel must have exactly len(user_ids) members
-                .having(func.count(ChannelMember.user_id) == len(unique_user_ids))
-                # 2. All those members must be in unique_user_ids
+                # Match the exact set of accounts that still exist.
+                .having(func.count(User.id) == len(unique_user_ids))
                 .having(match_count == len(unique_user_ids))
                 .subquery()
             )

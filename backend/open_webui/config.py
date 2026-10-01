@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import logging
 import os
 import shutil
@@ -18,8 +17,10 @@ from authlib.integrations.starlette_client import OAuth
 from pydantic import BaseModel
 
 from open_webui.env import (
+    USE_SLIM,
     DATA_DIR,
     DATABASE_URL,
+    ENABLE_ADMIN_CHAT_ACCESS,
     ENABLE_DB_MIGRATIONS,
     ENV,
     FRONTEND_BUILD_DIR,
@@ -35,11 +36,12 @@ from open_webui.env import (
     log,
 )
 from open_webui.models.config import Config
+from open_webui.utils.json_codec import JSONCodec
 
 
 async def seed_registered_defaults():
     await Config.rename_prefix('rag.web', 'web')
-    await Config.repair_flattened_dict_configs()
+    await Config.repair_config_rows()
     await Config.seed_defaults(DEFAULT_CONFIG)
 
 
@@ -73,6 +75,7 @@ def run_migrations():
         command.upgrade(alembic_cfg, 'head')
     except Exception as e:
         log.exception(f'Error running migrations: {e}')
+        raise
 
 
 if ENABLE_DB_MIGRATIONS:
@@ -84,7 +87,7 @@ async def import_legacy_config_json():
     if not os.path.exists(f'{DATA_DIR}/config.json'):
         return
     with open(f'{DATA_DIR}/config.json', 'r') as _f:
-        await Config.upsert(json.load(_f))
+        await Config.upsert(JSONCodec.loads(_f.read()))
     os.rename(f'{DATA_DIR}/config.json', f'{DATA_DIR}/old_config.json')
 
 
@@ -114,6 +117,9 @@ for file_path in (FRONTEND_BUILD_DIR / 'static').glob('**/*'):
         except Exception as e:
             logging.error(f'An error occurred: {e}')
 
+# LICENSE covers copied Open WebUI logo/favicon assets.
+# Do not alter, remove, obscure, or replace them except as LICENSE permits:
+# https://docs.openwebui.com/license.
 frontend_favicon = FRONTEND_BUILD_DIR / 'static' / 'favicon.png'
 
 if frontend_favicon.exists():
@@ -181,6 +187,9 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 # CUSTOM_NAME (Legacy)
 ####################################
 
+# LICENSE covers this legacy Open WebUI branding path.
+# Do not alter, remove, obscure, or replace it except as LICENSE permits:
+# https://docs.openwebui.com/license.
 CUSTOM_NAME = os.getenv('CUSTOM_NAME', '')
 
 if CUSTOM_NAME:
@@ -219,6 +228,7 @@ if CUSTOM_NAME:
 ####################################
 
 ENABLE_DIRECT_CONNECTIONS = os.getenv('ENABLE_DIRECT_CONNECTIONS', 'False').lower() == 'true'
+ENABLE_DIRECT_INTEGRATIONS = os.getenv('ENABLE_DIRECT_INTEGRATIONS', 'False').lower() == 'true'
 
 ####################################
 # OLLAMA_BASE_URL
@@ -270,9 +280,9 @@ def _resolve_ollama_base_url(url: str) -> str:
 
     if not default.result() and fallback.result():
         url = url.replace(':11434', ':12434')
-        log.info(f'Ollama port 11434 unreachable on {host}, falling back to 12434')
+        log.info('Ollama port 11434 unreachable on %s, falling back to 12434', host)
     elif not default.result():
-        log.info(f'Ollama ports 11434 and 12434 both unreachable on {host}')
+        log.info('Ollama ports 11434 and 12434 both unreachable on %s', host)
 
     return url
 
@@ -293,12 +303,12 @@ OLLAMA_API_CONFIGS = {}
 _ollama_api_configs = os.getenv('OLLAMA_API_CONFIGS', '')
 if _ollama_api_configs:
     try:
-        parsed = json.loads(_ollama_api_configs)
+        parsed = JSONCodec.loads(_ollama_api_configs)
         if isinstance(parsed, dict):
             OLLAMA_API_CONFIGS = parsed
         else:
             log.warning('OLLAMA_API_CONFIGS must be a JSON object, ignoring')
-    except (json.JSONDecodeError, TypeError):
+    except (JSONCodec.JSONDecodeError, TypeError):
         log.warning('OLLAMA_API_CONFIGS is not valid JSON, ignoring')
 
 ####################################
@@ -340,12 +350,12 @@ OPENAI_API_CONFIGS = {}
 _openai_api_configs = os.getenv('OPENAI_API_CONFIGS', '')
 if _openai_api_configs:
     try:
-        parsed = json.loads(_openai_api_configs)
+        parsed = JSONCodec.loads(_openai_api_configs)
         if isinstance(parsed, dict):
             OPENAI_API_CONFIGS = parsed
         else:
             log.warning('OPENAI_API_CONFIGS must be a JSON object, ignoring')
-    except (json.JSONDecodeError, TypeError):
+    except (JSONCodec.JSONDecodeError, TypeError):
         log.warning('OPENAI_API_CONFIGS is not valid JSON, ignoring')
 
 # Get the actual OpenAI API key based on the base URL
@@ -369,7 +379,7 @@ ENABLE_BASE_MODELS_CACHE = os.getenv('ENABLE_BASE_MODELS_CACHE', 'False').lower(
 ####################################
 
 try:
-    tool_server_connections = json.loads(os.getenv('TOOL_SERVER_CONNECTIONS', '[]'))
+    tool_server_connections = JSONCodec.loads(os.getenv('TOOL_SERVER_CONNECTIONS', '[]'))
 except Exception as e:
     log.exception(f'Error loading TOOL_SERVER_CONNECTIONS: {e}')
     tool_server_connections = []
@@ -383,12 +393,12 @@ OAUTH_CLIENT_TIMEOUT = os.getenv('OAUTH_CLIENT_TIMEOUT', '')
 # TERMINAL_SERVER
 ####################################
 
-terminal_server_connections = json.loads(os.getenv('TERMINAL_SERVER_CONNECTIONS', '[]'))
+terminal_server_connections = JSONCodec.loads(os.getenv('TERMINAL_SERVER_CONNECTIONS', '[]'))
 
 TERMINAL_SERVER_CONNECTIONS = terminal_server_connections
 
 try:
-    TERMINAL_PROXY_HEADERS = json.loads(os.getenv('TERMINAL_PROXY_HEADERS', '{}'))
+    TERMINAL_PROXY_HEADERS = JSONCodec.loads(os.getenv('TERMINAL_PROXY_HEADERS', '{}'))
 except Exception:
     TERMINAL_PROXY_HEADERS = {}
 
@@ -490,12 +500,12 @@ CODE_INTERPRETER_PYODIDE_PROMPT = """
 # Vector Database
 ####################################
 
-VECTOR_DB = os.getenv('VECTOR_DB', 'chroma')
+VECTOR_DB = os.getenv('VECTOR_DB', 'pgvector' if USE_SLIM else 'chroma')
 
 # Chroma
 CHROMA_DATA_PATH = f'{DATA_DIR}/vector_db'
 
-if VECTOR_DB == 'chroma':
+if VECTOR_DB == 'chroma' and not USE_SLIM:
     import chromadb
 
     CHROMA_TENANT = os.getenv('CHROMA_TENANT', chromadb.DEFAULT_TENANT)
@@ -636,7 +646,7 @@ SSL_ASSERT_FINGERPRINT = os.getenv('SSL_ASSERT_FINGERPRINT', None)
 ELASTICSEARCH_INDEX_PREFIX = os.getenv('ELASTICSEARCH_INDEX_PREFIX', 'open_webui_collections')
 # Pgvector
 PGVECTOR_DB_URL = os.getenv('PGVECTOR_DB_URL', DATABASE_URL)
-if VECTOR_DB == 'pgvector' and not PGVECTOR_DB_URL.startswith('postgres'):
+if not USE_SLIM and VECTOR_DB == 'pgvector' and not PGVECTOR_DB_URL.startswith('postgres'):
     raise ValueError(
         'Pgvector requires setting PGVECTOR_DB_URL or using Postgres with vector extension as the primary database.'
     )
@@ -731,6 +741,10 @@ else:
     except Exception:
         PGVECTOR_IVFFLAT_LISTS = 100
 
+PGVECTOR_ITERATIVE_SCAN = os.getenv('PGVECTOR_ITERATIVE_SCAN', 'relaxed_order').strip().lower()
+if PGVECTOR_ITERATIVE_SCAN not in ('off', 'relaxed_order', 'strict_order'):
+    PGVECTOR_ITERATIVE_SCAN = 'relaxed_order'
+
 # openGauss
 OPENGAUSS_DB_URL = os.getenv('OPENGAUSS_DB_URL', DATABASE_URL)
 
@@ -797,7 +811,7 @@ ORACLE_DB_POOL_MAX = int(os.getenv('ORACLE_DB_POOL_MAX', 10))
 ORACLE_DB_POOL_INCREMENT = int(os.getenv('ORACLE_DB_POOL_INCREMENT', 1))
 
 
-if VECTOR_DB == 'oracle23ai':
+if not USE_SLIM and VECTOR_DB == 'oracle23ai':
     if not ORACLE_DB_USER or not ORACLE_DB_PASSWORD or not ORACLE_DB_DSN:
         raise ValueError('Oracle23ai requires setting ORACLE_DB_USER, ORACLE_DB_PASSWORD, and ORACLE_DB_DSN.')
     if ORACLE_DB_USE_WALLET and (not ORACLE_WALLET_DIR or not ORACLE_WALLET_PASSWORD):
@@ -805,7 +819,7 @@ if VECTOR_DB == 'oracle23ai':
             'Oracle23ai requires setting ORACLE_WALLET_DIR and ORACLE_WALLET_PASSWORD when using wallet authentication.'
         )
 
-log.info(f'VECTOR_DB: {VECTOR_DB}')
+log.info('VECTOR_DB: %s', VECTOR_DB)
 
 # S3 Vector
 S3_VECTOR_BUCKET_NAME = os.getenv('S3_VECTOR_BUCKET_NAME', None)
@@ -894,8 +908,8 @@ MINERU_API_KEY = os.getenv('MINERU_API_KEY', '')
 
 mineru_params = os.getenv('MINERU_PARAMS', '')
 try:
-    mineru_params = json.loads(mineru_params)
-except json.JSONDecodeError:
+    mineru_params = JSONCodec.loads(mineru_params)
+except JSONCodec.JSONDecodeError:
     mineru_params = {}
 
 MINERU_PARAMS = mineru_params
@@ -908,8 +922,8 @@ EXTERNAL_DOCUMENT_LOADER_API_KEY = os.getenv('EXTERNAL_DOCUMENT_LOADER_API_KEY',
 
 external_document_loader_headers = os.getenv('EXTERNAL_DOCUMENT_LOADER_HEADERS', '')
 try:
-    external_document_loader_headers = json.loads(external_document_loader_headers)
-except json.JSONDecodeError:
+    external_document_loader_headers = JSONCodec.loads(external_document_loader_headers)
+except JSONCodec.JSONDecodeError:
     external_document_loader_headers = {}
 if not isinstance(external_document_loader_headers, dict):
     external_document_loader_headers = {}
@@ -918,14 +932,16 @@ EXTERNAL_DOCUMENT_LOADER_HEADERS = external_document_loader_headers
 
 TIKA_SERVER_URL = os.getenv('TIKA_SERVER_URL', 'http://tika:9998')
 
+TIKA_SERVER_VERSION = os.getenv('TIKA_SERVER_VERSION', '3')
+
 DOCLING_SERVER_URL = os.getenv('DOCLING_SERVER_URL', 'http://docling:5001')
 
 DOCLING_API_KEY = os.getenv('DOCLING_API_KEY', '')
 
 docling_params = os.getenv('DOCLING_PARAMS', '')
 try:
-    docling_params = json.loads(docling_params)
-except json.JSONDecodeError:
+    docling_params = JSONCodec.loads(docling_params)
+except JSONCodec.JSONDecodeError:
     docling_params = {}
 
 DOCLING_PARAMS = docling_params
@@ -966,6 +982,8 @@ RAG_FILE_MAX_COUNT = int(os.getenv('RAG_FILE_MAX_COUNT')) if os.getenv('RAG_FILE
 
 RAG_FILE_MAX_SIZE = int(os.getenv('RAG_FILE_MAX_SIZE')) if os.getenv('RAG_FILE_MAX_SIZE') else None
 
+ENABLE_KNOWLEDGE_FILE_RETENTION = os.getenv('ENABLE_KNOWLEDGE_FILE_RETENTION', 'False').lower() == 'true'
+
 RAG_FILE_CONTENT_SEARCH_MAX_CHARS = int(os.getenv('RAG_FILE_CONTENT_SEARCH_MAX_CHARS', str(64 * 1024 * 1024)))
 
 FILE_IMAGE_COMPRESSION_WIDTH = (
@@ -988,7 +1006,7 @@ PDF_EXTRACT_IMAGES = os.getenv('PDF_EXTRACT_IMAGES', 'False').lower() == 'true'
 PDF_LOADER_MODE = os.getenv('PDF_LOADER_MODE', 'page')
 
 RAG_EMBEDDING_MODEL = os.getenv('RAG_EMBEDDING_MODEL', 'sentence-transformers/all-MiniLM-L6-v2')
-log.info(f'Embedding model set: {RAG_EMBEDDING_MODEL}')
+log.info('Embedding model set: %s', RAG_EMBEDDING_MODEL)
 
 RAG_TOKENIZER_MODEL = os.getenv('RAG_TOKENIZER_MODEL', '')
 
@@ -1016,7 +1034,7 @@ RAG_RERANKING_ENGINE = os.getenv('RAG_RERANKING_ENGINE', '')
 
 RAG_RERANKING_MODEL = os.getenv('RAG_RERANKING_MODEL', '')
 if RAG_RERANKING_MODEL != '':
-    log.info(f'Reranking model set: {RAG_RERANKING_MODEL}')
+    log.info('Reranking model set: %s', RAG_RERANKING_MODEL)
 
 
 RAG_RERANKING_MODEL_AUTO_UPDATE = (
@@ -1100,12 +1118,26 @@ ENABLE_LOCAL_WEB_FETCH = (
 ENABLE_RAG_LOCAL_WEB_FETCH = ENABLE_LOCAL_WEB_FETCH
 
 
+# Operators extend this through WEB_FETCH_FILTER_LIST.
 DEFAULT_WEB_FETCH_FILTER_LIST = [
     '!169.254.169.254',
     '!fd00:ec2::254',
     '!metadata.google.internal',
     '!metadata.azure.com',
     '!100.100.100.200',
+    '!168.63.129.16',  # Azure platform channel, reachable from every Azure VM
+    '!192.88.99.0/24',  # 6to4 relay anycast, deprecated by RFC 7526
+    '!224.0.0.0/4',  # IPv4 multicast
+    '!::ffff:0:0:0/96',  # IPv4-translated (SIIT, RFC 2765), never routed
+    '!64:ff9b:1::/48',  # NAT64 local-use prefix, RFC 8215, not a public destination
+    '!100:0:0:1::/64',  # dummy prefix, RFC 9780
+    '!2001:1::1',  # PCP anycast, RFC 7723, answered by the local network's own edge device
+    '!2001:1::2',  # TURN anycast, RFC 8155, likewise
+    '!2001:20::/28',  # ORCHIDv2, RFC 7343, never routed
+    '!2001:30::/28',  # DRIP, RFC 9374, never routed
+    '!5f00::/16',  # SRv6 SIDs, RFC 9602, internal to one segment routing domain
+    '!fec0::/10',  # IPv6 site-local, deprecated by RFC 3879
+    '!ff00::/8',  # IPv6 multicast
 ]
 
 web_fetch_filter_list = os.getenv('WEB_FETCH_FILTER_LIST', '')
@@ -1148,7 +1180,7 @@ WEB_SEARCH_RESULT_COUNT = int(os.getenv('WEB_SEARCH_RESULT_COUNT', '3'))
 
 
 try:
-    web_search_domain_filter_list = json.loads(os.getenv('WEB_SEARCH_DOMAIN_FILTER_LIST', '[]'))
+    web_search_domain_filter_list = JSONCodec.loads(os.getenv('WEB_SEARCH_DOMAIN_FILTER_LIST', '[]'))
 except Exception as e:
     web_search_domain_filter_list = [
         # "wikipedia.com",
@@ -1244,6 +1276,9 @@ AZURE_AI_SEARCH_ENDPOINT = os.getenv('AZURE_AI_SEARCH_ENDPOINT', '')
 AZURE_AI_SEARCH_INDEX_NAME = os.getenv('AZURE_AI_SEARCH_INDEX_NAME', '')
 
 EXA_API_KEY = os.getenv('EXA_API_KEY', '')
+EXA_MAX_CONTENT_LENGTH = int(os.environ['EXA_MAX_CONTENT_LENGTH']) if os.getenv('EXA_MAX_CONTENT_LENGTH') else None
+if EXA_MAX_CONTENT_LENGTH is not None and EXA_MAX_CONTENT_LENGTH <= 0:
+    raise ValueError('EXA_MAX_CONTENT_LENGTH must be a positive integer or unset')
 
 PERPLEXITY_API_KEY = os.getenv('PERPLEXITY_API_KEY', '')
 
@@ -1266,6 +1301,12 @@ SOUGOU_API_SK = os.getenv('SOUGOU_API_SK', '')
 TAVILY_API_KEY = os.getenv('TAVILY_API_KEY', '')
 
 TAVILY_EXTRACT_DEPTH = os.getenv('TAVILY_EXTRACT_DEPTH', 'basic')
+
+STAAN_API_KEY = os.getenv('STAAN_API_KEY', '')
+
+STAAN_MARKET = os.getenv('STAAN_MARKET', 'en-us')
+
+STAAN_MAX_SNIPPETS = int(os.getenv('STAAN_MAX_SNIPPETS', '0'))
 
 PLAYWRIGHT_WS_URL = os.getenv('PLAYWRIGHT_WS_URL', '')
 
@@ -1297,8 +1338,8 @@ LINKUP_API_KEY = os.getenv('LINKUP_API_KEY', '')
 
 linkup_search_params = os.getenv('LINKUP_SEARCH_PARAMS', '')
 try:
-    linkup_search_params = json.loads(linkup_search_params)
-except json.JSONDecodeError:
+    linkup_search_params = JSONCodec.loads(linkup_search_params)
+except JSONCodec.JSONDecodeError:
     linkup_search_params = {}
 
 LINKUP_SEARCH_PARAMS = linkup_search_params
@@ -1330,8 +1371,8 @@ AUTOMATIC1111_API_AUTH = os.getenv('AUTOMATIC1111_API_AUTH', '')
 
 automatic1111_params = os.getenv('AUTOMATIC1111_PARAMS', '')
 try:
-    automatic1111_params = json.loads(automatic1111_params)
-except json.JSONDecodeError:
+    automatic1111_params = JSONCodec.loads(automatic1111_params)
+except JSONCodec.JSONDecodeError:
     automatic1111_params = {}
 
 AUTOMATIC1111_PARAMS = automatic1111_params
@@ -1455,8 +1496,8 @@ COMFYUI_WORKFLOW = os.getenv('COMFYUI_WORKFLOW', COMFYUI_DEFAULT_WORKFLOW)
 
 comfyui_workflow_nodes = os.getenv('COMFYUI_WORKFLOW_NODES', '')
 try:
-    comfyui_workflow_nodes = json.loads(comfyui_workflow_nodes)
-except json.JSONDecodeError:
+    comfyui_workflow_nodes = JSONCodec.loads(comfyui_workflow_nodes)
+except JSONCodec.JSONDecodeError:
     comfyui_workflow_nodes = []
 
 COMFYUI_WORKFLOW_NODES = comfyui_workflow_nodes
@@ -1468,8 +1509,8 @@ IMAGES_OPENAI_API_KEY = os.getenv('IMAGES_OPENAI_API_KEY', OPENAI_API_KEY)
 
 images_openai_params = os.getenv('IMAGES_OPENAI_PARAMS', '')
 try:
-    images_openai_params = json.loads(images_openai_params)
-except json.JSONDecodeError:
+    images_openai_params = JSONCodec.loads(images_openai_params)
+except JSONCodec.JSONDecodeError:
     images_openai_params = {}
 
 
@@ -1507,8 +1548,8 @@ IMAGES_EDIT_COMFYUI_WORKFLOW = os.getenv('IMAGES_EDIT_COMFYUI_WORKFLOW', '')
 
 images_edit_comfyui_workflow_nodes = os.getenv('IMAGES_EDIT_COMFYUI_WORKFLOW_NODES', '')
 try:
-    images_edit_comfyui_workflow_nodes = json.loads(images_edit_comfyui_workflow_nodes)
-except json.JSONDecodeError:
+    images_edit_comfyui_workflow_nodes = JSONCodec.loads(images_edit_comfyui_workflow_nodes)
+except JSONCodec.JSONDecodeError:
     images_edit_comfyui_workflow_nodes = []
 
 IMAGES_EDIT_COMFYUI_WORKFLOW_NODES = images_edit_comfyui_workflow_nodes
@@ -1582,8 +1623,8 @@ AUDIO_TTS_OPENAI_API_KEY = os.getenv('AUDIO_TTS_OPENAI_API_KEY', OPENAI_API_KEY)
 
 audio_tts_openai_params = os.getenv('AUDIO_TTS_OPENAI_PARAMS', '')
 try:
-    audio_tts_openai_params = json.loads(audio_tts_openai_params)
-except json.JSONDecodeError:
+    audio_tts_openai_params = JSONCodec.loads(audio_tts_openai_params)
+except JSONCodec.JSONDecodeError:
     audio_tts_openai_params = {}
 
 AUDIO_TTS_OPENAI_PARAMS = audio_tts_openai_params
@@ -1634,46 +1675,17 @@ DEFAULT_MODELS = os.getenv('DEFAULT_MODELS', None)
 
 DEFAULT_PINNED_MODELS = os.getenv('DEFAULT_PINNED_MODELS', None)
 
+# None uses the frontend's localized defaults; an empty list disables suggestions.
 try:
-    default_prompt_suggestions = json.loads(os.getenv('DEFAULT_PROMPT_SUGGESTIONS', '[]'))
+    DEFAULT_PROMPT_SUGGESTIONS = JSONCodec.loads(os.getenv('DEFAULT_PROMPT_SUGGESTIONS', 'null'))
 except Exception as e:
     log.exception(f'Error loading DEFAULT_PROMPT_SUGGESTIONS: {e}')
-    default_prompt_suggestions = []
-if default_prompt_suggestions == []:
-    default_prompt_suggestions = [
-        {
-            'title': ['Help me study', 'vocabulary for a college entrance exam'],
-            'content': "Help me study vocabulary: write a sentence for me to fill in the blank, and I'll try to pick the correct option.",
-        },
-        {
-            'title': ['Give me ideas', "for what to do with my kids' art"],
-            'content': "What are 5 creative things I could do with my kids' art? I don't want to throw them away, but it's also so much clutter.",
-        },
-        {
-            'title': ['Tell me a fun fact', 'about the Roman Empire'],
-            'content': 'Tell me a random fun fact about the Roman Empire',
-        },
-        {
-            'title': ['Show me a code snippet', "of a website's sticky header"],
-            'content': "Show me a code snippet of a website's sticky header in CSS and JavaScript.",
-        },
-        {
-            'title': [
-                'Explain options trading',
-                "if I'm familiar with buying and selling stocks",
-            ],
-            'content': "Explain options trading in simple terms if I'm familiar with buying and selling stocks.",
-        },
-        {
-            'title': ['Overcome procrastination', 'give me tips'],
-            'content': 'Could you start by asking me about instances when I procrastinate the most and then give me some suggestions to overcome it?',
-        },
-    ]
+    DEFAULT_PROMPT_SUGGESTIONS = None
 
-DEFAULT_PROMPT_SUGGESTIONS = default_prompt_suggestions
+DEFAULT_PROMPT_SUGGESTIONS_I18N = {}
 
 try:
-    model_order_list = json.loads(os.getenv('MODEL_ORDER_LIST', '[]'))
+    model_order_list = JSONCodec.loads(os.getenv('MODEL_ORDER_LIST', '[]'))
 except Exception as e:
     log.exception(f'Error loading MODEL_ORDER_LIST: {e}')
     model_order_list = []
@@ -1681,7 +1693,7 @@ except Exception as e:
 MODEL_ORDER_LIST = model_order_list
 
 try:
-    default_model_metadata = json.loads(os.getenv('DEFAULT_MODEL_METADATA', '{}'))
+    default_model_metadata = JSONCodec.loads(os.getenv('DEFAULT_MODEL_METADATA', '{}'))
 except Exception as e:
     log.exception(f'Error loading DEFAULT_MODEL_METADATA: {e}')
     default_model_metadata = {}
@@ -1689,12 +1701,21 @@ except Exception as e:
 DEFAULT_MODEL_METADATA = default_model_metadata
 
 try:
-    default_model_params = json.loads(os.getenv('DEFAULT_MODEL_PARAMS', '{}'))
+    default_model_params = JSONCodec.loads(os.getenv('DEFAULT_MODEL_PARAMS', '{}'))
 except Exception as e:
     log.exception(f'Error loading DEFAULT_MODEL_PARAMS: {e}')
     default_model_params = {}
 
 DEFAULT_MODEL_PARAMS = default_model_params
+
+
+try:
+    default_interface_settings = JSONCodec.loads(os.getenv('DEFAULT_INTERFACE_SETTINGS', '{}'))
+except Exception as e:
+    log.exception(f'Error loading DEFAULT_INTERFACE_SETTINGS: {e}')
+    default_interface_settings = {}
+
+DEFAULT_INTERFACE_SETTINGS = default_interface_settings if isinstance(default_interface_settings, dict) else {}
 
 DEFAULT_USER_ROLE = os.getenv('DEFAULT_USER_ROLE', 'pending')
 
@@ -2032,7 +2053,7 @@ ENABLE_USER_STATUS = os.getenv('ENABLE_USER_STATUS', 'True').lower() == 'true'
 
 ENABLE_EVALUATION_ARENA_MODELS = os.getenv('ENABLE_EVALUATION_ARENA_MODELS', 'True').lower() == 'true'
 try:
-    evaluation_arena_models = json.loads(os.getenv('EVALUATION_ARENA_MODELS', '[]'))
+    evaluation_arena_models = JSONCodec.loads(os.getenv('EVALUATION_ARENA_MODELS', '[]'))
     if not isinstance(evaluation_arena_models, list) or not all(
         isinstance(model, dict) for model in evaluation_arena_models
     ):
@@ -2047,6 +2068,9 @@ DEFAULT_ARENA_MODEL = {
     'id': 'arena-model',
     'name': 'Arena Model',
     'meta': {
+        # LICENSE covers this Open WebUI fallback logo.
+        # Do not alter, remove, obscure, or replace it except as LICENSE permits:
+        # https://docs.openwebui.com/license.
         'profile_image_url': '/favicon.png',
         'description': 'Submit your questions to anonymous AI chatbots and vote on the best response.',
         'model_ids': None,
@@ -2067,8 +2091,6 @@ BYPASS_ADMIN_ACCESS_CONTROL = (
     == 'true'
 )
 
-ENABLE_ADMIN_CHAT_ACCESS = os.getenv('ENABLE_ADMIN_CHAT_ACCESS', 'True').lower() == 'true'
-
 ENABLE_ADMIN_ANALYTICS = os.getenv('ENABLE_ADMIN_ANALYTICS', 'True').lower() == 'true'
 
 ENABLE_COMMUNITY_SHARING = os.getenv('ENABLE_COMMUNITY_SHARING', 'True').lower() == 'true'
@@ -2079,6 +2101,7 @@ ENABLE_USER_WEBHOOKS = os.getenv('ENABLE_USER_WEBHOOKS', 'False').lower() == 'tr
 
 # FastAPI / AnyIO settings
 THREAD_POOL_SIZE = os.getenv('THREAD_POOL_SIZE', None)
+THREAD_POOL_THREAD_NAME_PREFIX = os.getenv('THREAD_POOL_THREAD_NAME_PREFIX', '')
 
 if THREAD_POOL_SIZE is not None and isinstance(THREAD_POOL_SIZE, str):
     try:
@@ -2125,6 +2148,7 @@ else:
 
 
 class BannerModel(BaseModel):
+    i18n: dict[str, dict[str, str]] | None = None
     id: str
     type: str
     title: str | None = None
@@ -2134,7 +2158,7 @@ class BannerModel(BaseModel):
 
 
 try:
-    banners = json.loads(os.getenv('WEBUI_BANNERS', '[]'))
+    banners = JSONCodec.loads(os.getenv('WEBUI_BANNERS', '[]'))
     banners = [BannerModel(**banner) for banner in banners]
 except Exception as e:
     log.exception(f'Error loading WEBUI_BANNERS: {e}')
@@ -2157,9 +2181,19 @@ TASK_MODEL = os.getenv('TASK_MODEL', '')
 
 TASK_MODEL_EXTERNAL = os.getenv('TASK_MODEL_EXTERNAL', '')
 
+try:
+    task_model_params = JSONCodec.loads(os.getenv('TASK_MODEL_PARAMS', '{}'))
+except Exception as e:
+    log.exception(f'Error loading TASK_MODEL_PARAMS: {e}')
+    task_model_params = {}
+
+TASK_MODEL_PARAMS = task_model_params
+
 CONTEXT_COMPACTION_MODEL = os.getenv('CONTEXT_COMPACTION_MODEL', '')
 
 ENABLE_CONTEXT_COMPACTION = os.getenv('ENABLE_CONTEXT_COMPACTION', 'False').lower() == 'true'
+
+ENABLE_TOOL_PERMISSIONS = os.getenv('ENABLE_TOOL_PERMISSIONS', 'False').lower() == 'true'
 
 CONTEXT_COMPACTION_TOKEN_THRESHOLD = int(os.getenv('CONTEXT_COMPACTION_TOKEN_THRESHOLD', '80000'))
 
@@ -2470,12 +2504,12 @@ GOOGLE_OAUTH_AUTHORIZE_PARAMS = {}
 _google_oauth_authorize_params = os.getenv('GOOGLE_OAUTH_AUTHORIZE_PARAMS', '')
 if _google_oauth_authorize_params:
     try:
-        _parsed = json.loads(_google_oauth_authorize_params)
+        _parsed = JSONCodec.loads(_google_oauth_authorize_params)
         if isinstance(_parsed, dict):
             GOOGLE_OAUTH_AUTHORIZE_PARAMS = _parsed
         else:
             log.warning('GOOGLE_OAUTH_AUTHORIZE_PARAMS must be a JSON object, ignoring')
-    except (json.JSONDecodeError, TypeError):
+    except (JSONCodec.JSONDecodeError, TypeError):
         log.warning('GOOGLE_OAUTH_AUTHORIZE_PARAMS is not valid JSON, ignoring')
 
 MICROSOFT_CLIENT_ID = os.getenv('MICROSOFT_CLIENT_ID', '')
@@ -2590,12 +2624,12 @@ OAUTH_AUTHORIZE_PARAMS = {}
 _oauth_authorize_params = os.getenv('OAUTH_AUTHORIZE_PARAMS', '')
 if _oauth_authorize_params:
     try:
-        _parsed = json.loads(_oauth_authorize_params)
+        _parsed = JSONCodec.loads(_oauth_authorize_params)
         if isinstance(_parsed, dict):
             OAUTH_AUTHORIZE_PARAMS = _parsed
         else:
             log.warning('OAUTH_AUTHORIZE_PARAMS must be a JSON object, ignoring')
-    except (json.JSONDecodeError, TypeError):
+    except (JSONCodec.JSONDecodeError, TypeError):
         log.warning('OAUTH_AUTHORIZE_PARAMS is not valid JSON, ignoring')
 
 
@@ -2787,6 +2821,7 @@ LDAP_ATTRIBUTE_FOR_GROUPS = os.getenv('LDAP_ATTRIBUTE_FOR_GROUPS', 'memberOf')
 
 DEFAULT_CONFIG = {
     'direct.enable': ENABLE_DIRECT_CONNECTIONS,
+    'direct.integrations.enable': ENABLE_DIRECT_INTEGRATIONS,
     'ollama.enable': ENABLE_OLLAMA_API,
     'ollama.base_urls': OLLAMA_BASE_URLS,
     'ollama.api_configs': OLLAMA_API_CONFIGS,
@@ -2848,6 +2883,7 @@ DEFAULT_CONFIG = {
     'rag.external_document_loader_api_key': EXTERNAL_DOCUMENT_LOADER_API_KEY,
     'rag.external_document_loader_headers': EXTERNAL_DOCUMENT_LOADER_HEADERS,
     'rag.tika_server_url': TIKA_SERVER_URL,
+    'rag.tika_server_version': TIKA_SERVER_VERSION,
     'rag.docling_server_url': DOCLING_SERVER_URL,
     'rag.docling_api_key': DOCLING_API_KEY,
     'rag.docling_params': DOCLING_PARAMS,
@@ -2950,6 +2986,7 @@ DEFAULT_CONFIG = {
     'web.search.azure_ai_search_endpoint': AZURE_AI_SEARCH_ENDPOINT,
     'web.search.azure_ai_search_index_name': AZURE_AI_SEARCH_INDEX_NAME,
     'web.search.exa_api_key': EXA_API_KEY,
+    'web.search.exa_max_content_length': EXA_MAX_CONTENT_LENGTH,
     'web.search.perplexity_api_key': PERPLEXITY_API_KEY,
     'web.search.perplexity_model': PERPLEXITY_MODEL,
     'web.search.perplexity_search_context_usage': PERPLEXITY_SEARCH_CONTEXT_USAGE,
@@ -2961,6 +2998,9 @@ DEFAULT_CONFIG = {
     'web.search.sougou_api_sk': SOUGOU_API_SK,
     'web.search.tavily_api_key': TAVILY_API_KEY,
     'web.search.tavily_extract_depth': TAVILY_EXTRACT_DEPTH,
+    'web.search.staan_api_key': STAAN_API_KEY,
+    'web.search.staan_market': STAAN_MARKET,
+    'web.search.staan_max_snippets': STAAN_MAX_SNIPPETS,
     'web.loader.playwright_ws_url': PLAYWRIGHT_WS_URL,
     'web.loader.playwright_timeout': PLAYWRIGHT_TIMEOUT,
     'web.loader.firecrawl_api_key': FIRECRAWL_API_KEY,
@@ -3046,7 +3086,10 @@ DEFAULT_CONFIG = {
     'ui.default_locale': DEFAULT_LOCALE,
     'ui.default_models': DEFAULT_MODELS,
     'ui.default_pinned_models': DEFAULT_PINNED_MODELS,
+    'ui.default_interface_settings': DEFAULT_INTERFACE_SETTINGS,
+    'ui.i18n': {},
     'ui.prompt_suggestions': DEFAULT_PROMPT_SUGGESTIONS,
+    'ui.prompt_suggestions_i18n': DEFAULT_PROMPT_SUGGESTIONS_I18N,
     'ui.model_order_list': MODEL_ORDER_LIST,
     'models.default_metadata': DEFAULT_MODEL_METADATA,
     'models.default_params': DEFAULT_MODEL_PARAMS,
@@ -3085,12 +3128,14 @@ DEFAULT_CONFIG = {
     'auth.admin.email': ADMIN_EMAIL,
     'task.model.default': TASK_MODEL,
     'task.model.external': TASK_MODEL_EXTERNAL,
+    'task.model.params': TASK_MODEL_PARAMS,
     'chat.context_compaction.model': CONTEXT_COMPACTION_MODEL,
     'chat.context_compaction.enable': ENABLE_CONTEXT_COMPACTION,
     'chat.context_compaction.token_threshold': CONTEXT_COMPACTION_TOKEN_THRESHOLD,
     'chat.context_compaction.token_cap': CONTEXT_COMPACTION_TOKEN_CAP,
     'chat.context_compaction.retention_percentage': CONTEXT_COMPACTION_RETENTION_PERCENTAGE,
     'chat.context_compaction.prompt_template': CONTEXT_COMPACTION_PROMPT_TEMPLATE,
+    'chat.tool_permissions.enable': ENABLE_TOOL_PERMISSIONS,
     'task.title.prompt_template': TITLE_GENERATION_PROMPT_TEMPLATE,
     'task.tags.prompt_template': TAGS_GENERATION_PROMPT_TEMPLATE,
     'task.image.prompt_template': IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE,

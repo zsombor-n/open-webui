@@ -565,7 +565,7 @@
 				<div class="mt-3">
 					<div class="flex justify-between items-center">
 						<label for="event-webhook-all-events" class={`text-xs text-gray-500`}
-							>{$i18n.t('Events')}</label
+							>{$i18n.t('settings.admin.general.events.events.label')}</label
 						>
 						<label class="flex items-center gap-1.5 text-xs text-gray-700 dark:text-gray-300">
 							<input
@@ -642,6 +642,9 @@
 							</div>
 
 							<div class="text-xs text-gray-500">
+								<!-- LICENSE covers this Open WebUI wordmark.
+									Do not alter, remove, obscure, or replace it except as LICENSE permits:
+									https://docs.openwebui.com/license. -->
 								{$i18n.t(
 									'Event names may change as Open WebUI evolves. Use broad patterns like user.* for integrations that should continue across new related events.'
 								)}
@@ -687,16 +690,18 @@
 />
 
 <div class="mt-5">
-	<div class="mb-2 text-xs text-gray-400 dark:text-gray-600">{$i18n.t('Events')}</div>
+	<div class="mb-2 text-xs text-gray-400 dark:text-gray-600">
+		{$i18n.t('settings.admin.general.events.events.label')}
+	</div>
 
 	<div class="flex flex-col w-full justify-between gap-2.5">
 		<div class="flex w-full items-start justify-between gap-4">
 			<div class="min-w-0">
-				<div class="text-xs text-gray-600 dark:text-gray-400">{$i18n.t('Webhooks')}</div>
+				<div class="text-xs text-gray-600 dark:text-gray-400">
+					{$i18n.t('settings.admin.general.events.webhooks.label')}
+				</div>
 				<div class="mt-1.5 text-[0.6875rem] text-gray-400 dark:text-gray-600">
-					{$i18n.t(
-						'Send product events as JSON to external services. Chat destinations receive readable messages.'
-					)}
+					{$i18n.t('settings.admin.general.events.webhooks.description')}
 				</div>
 			</div>
 			<Tooltip content={$i18n.t('Add webhook')}>

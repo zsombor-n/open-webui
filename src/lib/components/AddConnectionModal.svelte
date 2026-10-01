@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { getContext, onMount } from 'svelte';
-	const i18n = getContext('i18n');
+	const i18n = getContext<any>('i18n');
 
 	import { verifyOpenAIConnection } from '$lib/apis/openai';
 	import { verifyOllamaConnection } from '$lib/apis/ollama';
@@ -18,6 +18,7 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Textarea from './common/Textarea.svelte';
+	import { normalizeTags } from '$lib/utils/tags';
 
 	export let onSubmit: Function = () => {};
 	export let onDelete: Function = () => {};
@@ -28,11 +29,12 @@
 	export let ollama = false;
 	export let direct = false;
 
-	export let connection = null;
+	export let connection: any = null;
 
 	let url = '';
 	let key = '';
 	let auth_type = 'bearer';
+	let forwardCookies = false;
 
 	let connectionType = 'external';
 	let provider = '';
@@ -114,6 +116,7 @@
 				key,
 				config: {
 					auth_type,
+					...(!direct && !ollama ? { forward_cookies: forwardCookies } : {}),
 					...(provider ? { provider } : {}),
 					...(azure ? { azure: true } : {}),
 					api_version: apiVersion,
@@ -140,10 +143,19 @@
 	};
 
 	const addModelHandler = () => {
-		if (modelId) {
-			modelIds = [...modelIds, modelId];
-			modelId = '';
+		const newModelId = modelId.trim();
+
+		if (!newModelId) {
+			return;
 		}
+
+		if (modelIds.includes(newModelId)) {
+			toast.error($i18n.t('Model ID is already added'));
+			return;
+		}
+
+		modelIds = [...modelIds, newModelId];
+		modelId = '';
 	};
 
 	const submitHandler = async () => {
@@ -205,6 +217,7 @@
 				model_ids: modelIds,
 				connection_type: connectionType,
 				auth_type,
+				...(!direct && !ollama ? { forward_cookies: forwardCookies } : {}),
 				headers: headers ? JSON.parse(headers) : undefined,
 				passthrough_params: parsePassthroughParams(passthroughParams),
 				...(provider ? { provider } : {}),
@@ -222,6 +235,7 @@
 		url = '';
 		key = '';
 		auth_type = 'bearer';
+		forwardCookies = false;
 		prefixId = '';
 		passthroughParams = '';
 		showAdvanced = false;
@@ -230,6 +244,7 @@
 	};
 
 	const init = () => {
+		forwardCookies = connection?.config?.forward_cookies ?? false;
 		if (connection) {
 			url = connection.url;
 			key = connection.key;
@@ -240,12 +255,12 @@
 				: '';
 
 			enable = connection.config?.enable ?? true;
-			tags = connection.config?.tags ?? [];
+			tags = normalizeTags(connection.config?.tags);
 			prefixId = connection.config?.prefix_id ?? '';
 			passthroughParams = Array.isArray(connection.config?.passthrough_params)
 				? connection.config.passthrough_params.join(', ')
 				: (connection.config?.passthrough_params ?? '');
-			modelIds = connection.config?.model_ids ?? [];
+			modelIds = [...new Set(connection.config?.model_ids ?? [])];
 
 			if (ollama) {
 				connectionType = connection.config?.connection_type ?? 'local';
@@ -496,6 +511,24 @@
 						</div>
 
 						{#if showAdvanced}
+							{#if !direct && !ollama}
+								<div class="flex items-center justify-between gap-3 mt-2">
+									<div>
+										<label for="forward-cookies" class="text-xs text-gray-500">
+											{$i18n.t('Forward cookies')}
+										</label>
+										<p class="text-xs text-gray-500">
+											{$i18n.t('Forward cookies from your Open WebUI request to this server.')}
+										</p>
+									</div>
+									<Switch
+										id="forward-cookies"
+										ariaLabel={$i18n.t('Forward cookies')}
+										bind:state={forwardCookies}
+									/>
+								</div>
+							{/if}
+
 							{#if !direct}
 								<div class="flex gap-2 mt-2">
 									<div class="flex flex-col w-full">
@@ -592,11 +625,12 @@
 										<select
 											id="provider-select"
 											bind:value={provider}
-											class="text-xs text-gray-700 dark:text-gray-300 bg-transparent outline-hidden"
+											class="text-xs text-gray-700 dark:text-gray-300 bg-transparent pr-5 outline-hidden"
 										>
 											<option value="">{$i18n.t('Default')}</option>
 											<option value="azure">{$i18n.t('Azure OpenAI')}</option>
 											<option value="llama.cpp">{$i18n.t('llama.cpp')}</option>
+											<option value="lmstudio">{$i18n.t('LM Studio')}</option>
 											<option value="litellm">{$i18n.t('LiteLLM')}</option>
 										</select>
 									</div>
