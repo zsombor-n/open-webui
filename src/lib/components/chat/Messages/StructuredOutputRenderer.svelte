@@ -1,13 +1,16 @@
 <script lang="ts">
+	import { getContext } from 'svelte';
 	import Collapsible from '$lib/components/common/Collapsible.svelte';
+	import Image from '$lib/components/common/Image.svelte';
 	import ToolCallDisplay from '$lib/components/common/ToolCallDisplay.svelte';
-	import TerminalOutputFile from './TerminalOutputFile.svelte';
+	import ToolOutputFile from './ToolOutputFile.svelte';
 	import { resolveChatMessageToolCall } from '$lib/apis/chats';
 	import { settings } from '$lib/stores';
 	import { toast } from 'svelte-sonner';
 
 	import Markdown from './Markdown.svelte';
 	import ConsecutiveDetailsGroup from './Markdown/ConsecutiveDetailsGroup.svelte';
+	import ContextCompactionLabel from './ContextCompactionLabel.svelte';
 	import {
 		buildOutputDisplayItems,
 		type OutputDetailToken,
@@ -37,6 +40,7 @@
 	export let onPreview: any = () => {};
 	export let onToolCallResolved: any = () => {};
 
+	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
 	const getDetailTitle = (detailToken: OutputDetailToken): any => detailToken.summary;
 	const getDetailAttributes = (detailToken: OutputDetailToken): any => detailToken.attributes;
 	let resolvingCallId = '';
@@ -99,6 +103,8 @@
 		{:else}
 			<div class="whitespace-pre-wrap text-[0.9375rem]">{displayItem.text}</div>
 		{/if}
+	{:else if displayItem.type === 'image'}
+		<Image src={displayItem.src} alt={$i18n.t('Generated Image')} />
 	{:else if displayItem.type === 'detail_group'}
 		<ConsecutiveDetailsGroup
 			id={`${id}-${displayItem.id}`}
@@ -168,8 +174,10 @@
 		</ConsecutiveDetailsGroup>
 	{:else if displayItem.type === 'file'}
 		{#if displayItem.item?.displayed || $settings?.terminalFileDisplay === 'inline'}
-			<TerminalOutputFile item={displayItem.item} {chatId} />
+			<ToolOutputFile item={displayItem.item} {chatId} />
 		{/if}
+	{:else if displayItem.type === 'context_compaction'}
+		<ContextCompactionLabel summary={displayItem.summary} {compactPreview} />
 	{:else}
 		{@const detailToken = displayItem.token}
 		{#if detailToken.attributes?.type === 'tool_calls'}

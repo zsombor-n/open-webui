@@ -92,7 +92,10 @@ const sandboxScript = String.raw`
 			if (['string', 'number', 'boolean'].includes(typeof value)) return value;
 			if (typeof value === 'bigint') return value.toString();
 			if (Array.isArray(value)) return value.map(clean);
-			if (typeof value.toJs === 'function') return clean(value.toJs());
+			if (typeof value.toJs === 'function') {
+				const converted = value.toJs();
+				return typeof converted?.toJs === 'function' ? converted.toString() : clean(converted);
+			}
 			if (typeof value === 'object') {
 				const out = {};
 				for (const key in value) {
@@ -134,7 +137,7 @@ const sandboxScript = String.raw`
 		let result = null;
 		if (files && files.length > 0) upload(files);
 		try {
-			if (code.includes('matplotlib')) await patchMatplotlib();
+			if (code.includes('matplotlib') && 'matplotlib' in pyodide.loadedPackages) await patchMatplotlib();
 			result = clean(await pyodide.runPythonAsync(code));
 		} catch (error) {
 			stderr = error && error.message ? error.message : String(error);

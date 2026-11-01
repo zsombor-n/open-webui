@@ -19,6 +19,8 @@
 	marked.use(footnoteExtension(options));
 	marked.use(colonFenceExtension(options));
 	marked.use(disableSingleTilde);
+	// Also set by RichTextInput, but messages can render before any input mounts.
+	marked.use({ breaks: true });
 	marked.use({
 		extensions: [
 			mentionExtension({ triggerChar: '@' }),
@@ -29,7 +31,7 @@
 </script>
 
 <script>
-	import { onDestroy } from 'svelte';
+	import { onDestroy, setContext } from 'svelte';
 	import { replaceTokens, processResponseContent } from '$lib/utils';
 	import { user } from '$lib/stores';
 
@@ -49,6 +51,14 @@
 	export let editCodeBlock = true;
 	export let topPadding = false;
 	export let allowEmbeds = false;
+	export let allowHtml = true;
+	export let allowRemoteContent = true;
+
+	setContext('markdown', {
+		get allowRemoteContent() {
+			return allowRemoteContent;
+		}
+	});
 
 	export let sourceIds = [];
 
@@ -75,6 +85,20 @@
 		lastParsedContent = processed;
 
 		tokens = marked.lexer(processed);
+		if (!allowHtml || !allowRemoteContent) {
+			marked.walkTokens(tokens, (token) => {
+				if (
+					(!allowHtml && token.type === 'html') ||
+					(!allowRemoteContent &&
+						['html', 'image', 'iframe', 'mention', 'details', 'colonFence'].includes(token.type))
+				) {
+					const raw = token.raw;
+					// Drop child tokens too, so blocked content cannot render through a nested renderer.
+					for (const key of Object.keys(token)) Reflect.deleteProperty(token, key);
+					Object.assign(token, { type: 'text', raw, text: raw });
+				}
+			});
+		}
 	};
 
 	const updateHandler = (content) => {

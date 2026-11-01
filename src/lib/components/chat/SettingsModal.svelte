@@ -9,7 +9,7 @@
 	import { getContext, tick } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import { toast } from 'svelte-sonner';
-	import { config, models, settings, user } from '$lib/stores';
+	import { config, mobile, models, settings, user, visibleControls } from '$lib/stores';
 	import type { SettingsModalRequest } from '$lib/stores';
 	import { getUserSettings, updateUserSettings } from '$lib/apis/users';
 	import { getBackendConfig, getModels as _getModels } from '$lib/apis';
@@ -52,6 +52,7 @@
 	import AdminEvaluations from '$lib/components/admin/Settings/Evaluations.svelte';
 	import AdminAnalytics from '$lib/components/admin/Analytics.svelte';
 	import AdminIntegrations from '$lib/components/admin/Settings/Integrations.svelte';
+	import AdminApps from '$lib/components/admin/Settings/Apps.svelte';
 	import AdminDocuments from '$lib/components/admin/Settings/Documents.svelte';
 	import AdminWebSearch from '$lib/components/admin/Settings/WebSearch.svelte';
 	import AdminCodeExecution from '$lib/components/admin/Settings/CodeExecution.svelte';
@@ -100,6 +101,7 @@
 	$: if (show !== lastShow) {
 		lastShow = show;
 		search = '';
+		showSearch = false;
 		if (show && typeof show === 'object') {
 			selectedTab = show.tab;
 			tabState = show.state ?? null;
@@ -128,6 +130,7 @@
 	$: if (!modalShow && show !== false) {
 		show = false;
 		search = '';
+		showSearch = false;
 		lastShow = false;
 		selectedTab = 'general';
 		tabState = null;
@@ -154,22 +157,24 @@
 		account: $i18n.t('Profile'),
 		about: $i18n.t('Profile')
 	};
+	// $i18n.t('Experience');
 	$: adminSettingGroups = {
 		'admin:general': $i18n.t('System'),
 		'admin:authentication': $i18n.t('System'),
+		'admin:interface': $i18n.t('System'),
 		'admin:connections': $i18n.t('AI'),
 		'admin:models': $i18n.t('AI'),
 		'admin:subagents': $i18n.t('AI'),
-		'admin:evaluations': $i18n.t('Quality'),
-		'admin:analytics': $i18n.t('Quality'),
 		'admin:integrations': $i18n.t('Tools'),
+		'admin:apps': $i18n.t('Tools'),
 		'admin:documents': $i18n.t('Tools'),
+		'admin:audio': $i18n.t('Tools'),
+		'admin:images': $i18n.t('Tools'),
 		'admin:web': $i18n.t('Tools'),
 		'admin:code-execution': $i18n.t('Tools'),
 		'admin:pipelines': $i18n.t('Tools'),
-		'admin:interface': $i18n.t('Experience'),
-		'admin:audio': $i18n.t('Experience'),
-		'admin:images': $i18n.t('Experience'),
+		'admin:evaluations': $i18n.t('Quality'),
+		'admin:analytics': $i18n.t('Quality'),
 		'admin:db': $i18n.t('Data')
 	};
 	const settingGroupTitle = (tabId: string) =>
@@ -178,7 +183,7 @@
 	const shouldShowSettingGroup = (tabIds: string[], index: number) =>
 		index === 0 || settingGroupTitle(tabIds[index]) !== settingGroupTitle(tabIds[index - 1]);
 	const settingGroupHeadingClass = (first: boolean) =>
-		`hidden md:block shrink-0 text-[0.625rem] text-gray-400 dark:text-gray-600 px-2 ${
+		`hidden md:block shrink-0 text-[0.625rem] text-gray-600 dark:text-gray-500 px-2 ${
 			first ? 'mt-0.5' : 'mt-2'
 		} mb-0.5`;
 
@@ -278,6 +283,12 @@
 			searchPrefixes: ['settings.admin.authentication.']
 		},
 		{
+			id: 'admin:interface',
+			titleKey: 'settings.admin.interface.title',
+			title: $i18n.t('settings.admin.interface.title'),
+			searchPrefixes: ['settings.admin.interface.', 'settings.personal.general.parameters.']
+		},
+		{
 			id: 'admin:connections',
 			titleKey: 'settings.admin.connections.title',
 			title: $i18n.t('settings.admin.connections.title'),
@@ -296,10 +307,22 @@
 			searchPrefixes: ['settings.admin.subagents.']
 		},
 		{
-			id: 'admin:interface',
-			titleKey: 'settings.admin.interface.title',
-			title: $i18n.t('settings.admin.interface.title'),
-			searchPrefixes: ['settings.admin.interface.', 'settings.personal.general.parameters.']
+			id: 'admin:integrations',
+			titleKey: 'settings.admin.integrations.title',
+			title: $i18n.t('settings.admin.integrations.title'),
+			searchPrefixes: ['settings.admin.integrations.']
+		},
+		{
+			id: 'admin:apps',
+			titleKey: 'Apps',
+			title: $i18n.t('Apps'),
+			searchPrefixes: []
+		},
+		{
+			id: 'admin:documents',
+			titleKey: 'settings.admin.documents.title',
+			title: $i18n.t('settings.admin.documents.title'),
+			searchPrefixes: ['settings.admin.documents.']
 		},
 		{
 			id: 'admin:audio',
@@ -312,30 +335,6 @@
 			titleKey: 'settings.admin.images.title',
 			title: $i18n.t('settings.admin.images.title'),
 			searchPrefixes: ['settings.admin.images.']
-		},
-		{
-			id: 'admin:evaluations',
-			titleKey: 'settings.admin.evaluations.title',
-			title: $i18n.t('settings.admin.evaluations.title'),
-			searchPrefixes: ['settings.admin.evaluations.']
-		},
-		{
-			id: 'admin:analytics',
-			titleKey: 'settings.admin.analytics.title',
-			title: $i18n.t('settings.admin.analytics.title'),
-			searchPrefixes: ['settings.admin.analytics.']
-		},
-		{
-			id: 'admin:integrations',
-			titleKey: 'settings.admin.integrations.title',
-			title: $i18n.t('settings.admin.integrations.title'),
-			searchPrefixes: ['settings.admin.integrations.']
-		},
-		{
-			id: 'admin:documents',
-			titleKey: 'settings.admin.documents.title',
-			title: $i18n.t('settings.admin.documents.title'),
-			searchPrefixes: ['settings.admin.documents.']
 		},
 		{
 			id: 'admin:web',
@@ -356,6 +355,18 @@
 			searchPrefixes: ['settings.admin.pipelines.']
 		},
 		{
+			id: 'admin:analytics',
+			titleKey: 'settings.admin.analytics.title',
+			title: $i18n.t('settings.admin.analytics.title'),
+			searchPrefixes: ['settings.admin.analytics.']
+		},
+		{
+			id: 'admin:evaluations',
+			titleKey: 'settings.admin.evaluations.title',
+			title: $i18n.t('settings.admin.evaluations.title'),
+			searchPrefixes: ['settings.admin.evaluations.']
+		},
+		{
 			id: 'admin:db',
 			titleKey: 'settings.admin.db.title',
 			title: $i18n.t('settings.admin.db.title'),
@@ -368,6 +379,9 @@
 	let filteredAdminSettings: string[] = [];
 
 	let search = '';
+	let showSearch = false;
+	let searchInput: HTMLInputElement;
+	let searchButton: HTMLButtonElement;
 	let englishRequested = false;
 	$: if (modalShow && !englishRequested) {
 		englishRequested = true;
@@ -394,6 +408,19 @@
 				return $user?.role === 'admin' || ($user?.permissions?.settings?.interface ?? true);
 			}
 
+			if (tab.id === 'audio') {
+				return (
+					$user?.role === 'admin' ||
+					($user?.permissions?.chat?.stt ?? true) ||
+					($user?.permissions?.chat?.tts ?? true) ||
+					($user?.permissions?.chat?.call ?? true)
+				);
+			}
+
+			if (tab.id === 'usage') {
+				return $visibleControls['settings.usage'];
+			}
+
 			if (tab.id === 'personalization') {
 				return (
 					$config?.features?.enable_memories &&
@@ -407,7 +434,9 @@
 		return (
 			$user?.role === 'admin' ? [...personalSettings, ...administratorTabs] : personalSettings
 		).filter(
-			(tab) => tab.id !== 'admin:analytics' || ($config?.features?.enable_admin_analytics ?? true)
+			(tab) =>
+				(tab.id !== 'admin:analytics' || ($config?.features?.enable_admin_analytics ?? true)) &&
+				(tab.id !== 'admin:apps' || $config?.features?.enable_apps)
 		);
 	};
 
@@ -424,11 +453,19 @@
 		selectedTab = id;
 	};
 
+	const toggleSearch = async () => {
+		showSearch = !(showSearch || search);
+		if (!showSearch) search = '';
+		await tick();
+		(showSearch ? searchInput : searchButton)?.focus();
+	};
+
 	const searchKeydown = (event: KeyboardEvent) => {
-		if (event.key === 'Escape' && search) {
+		if (event.key === 'Escape' && (search || $mobile)) {
 			event.preventDefault();
 			event.stopPropagation();
-			search = '';
+			if (search) search = '';
+			else toggleSearch();
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
 			if (filteredSettings.length) selectTab(filteredSettings[0]);
@@ -467,7 +504,7 @@
 		`flex items-center gap-1.5 h-7 px-2 md:w-full shrink-0 rounded-lg text-xs text-left transition-colors duration-75 ${
 			active
 				? 'font-medium text-gray-900 dark:text-white bg-gray-50 dark:bg-white/[0.04]'
-				: 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+				: 'text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
 		}`;
 
 	let selectedTab = 'general';
@@ -508,40 +545,57 @@
 <Modal
 	size="full"
 	containerClassName="p-4 sm:p-6 lg:p-8"
-	className="!w-[calc(100vw-2rem)] sm:!w-[calc(100vw-3rem)] lg:!w-[calc(100vw-4rem)] !max-w-[80rem] h-[min(max(54rem,80dvh),calc(100dvh-4rem))] max-h-[calc(100dvh-4rem)] flex flex-col md:flex-row bg-white dark:bg-gray-900 rounded-4xl overflow-hidden"
+	className="!w-[calc(100vw-2rem)] sm:!w-[calc(100vw-3rem)] lg:!w-[calc(100vw-4rem)] h-[calc(100dvh-4rem)] max-h-[calc(100dvh-4rem)] flex flex-col md:flex-row bg-white dark:bg-gray-900 rounded-4xl overflow-hidden"
+	ariaLabel={$i18n.t('Settings')}
 	bind:show={modalShow}
 >
 	<nav
 		id="settings-tabs-container"
 		class="shrink-0 min-w-0 md:min-h-0 flex flex-col border-b md:border-b-0 md:border-r border-gray-100/30 dark:border-white/[0.02] md:w-[15rem]"
 	>
-		<button
-			class="flex items-center gap-1.5 h-7 px-2 m-1 md:mb-0 md:w-[calc(100%-0.5rem)] shrink-0 rounded-lg text-xs text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-75"
-			type="button"
-			on:click={() => {
-				show = false;
-			}}
-		>
-			<ChevronLeft className="size-3" strokeWidth="2" />
-			<span>{$i18n.t('Back')}</span>
-		</button>
-
-		<div
-			class="flex items-center gap-1.5 h-7 px-2 mx-1 mt-1 mb-0.5 shrink-0 rounded-lg text-xs bg-gray-50/70 dark:bg-white/[0.03]"
-		>
-			<div class="self-center rounded-l-xl bg-transparent">
+		<div class="flex items-center gap-1 m-1 md:mb-0 shrink-0">
+			<button
+				class="flex flex-1 items-center gap-1.5 h-7 px-2 rounded-lg text-xs text-gray-600 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors duration-75"
+				type="button"
+				on:click={() => {
+					show = false;
+				}}
+			>
+				<ChevronLeft className="size-3" strokeWidth="2" />
+				<span>{$i18n.t('Back')}</span>
+			</button>
+			<button
+				bind:this={searchButton}
+				type="button"
+				class="flex md:hidden size-7 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-50 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-white/[0.04] dark:hover:text-gray-300"
+				aria-label={$i18n.t('Search')}
+				aria-expanded={showSearch || !!search}
+				aria-controls="search-input-settings-modal"
+				on:click={toggleSearch}
+			>
 				<Search className="size-3.5" strokeWidth="1.5" />
-			</div>
-			<label class="sr-only" for="search-input-settings-modal">{$i18n.t('Search')}</label>
-			<input
-				data-settings-search
-				class="w-full text-xs bg-transparent py-1 outline-hidden dark:text-gray-300"
-				bind:value={search}
-				id="search-input-settings-modal"
-				on:keydown={searchKeydown}
-				placeholder={$i18n.t('Search')}
-			/>
+			</button>
 		</div>
+
+		{#if !$mobile || showSearch || search}
+			<div
+				class="flex items-center gap-1.5 h-7 px-2 mx-1 md:mt-1 mb-0.5 shrink-0 rounded-lg text-xs bg-gray-50/70 dark:bg-white/[0.03]"
+			>
+				<div class="self-center rounded-l-xl bg-transparent">
+					<Search className="size-3.5" strokeWidth="1.5" />
+				</div>
+				<label class="sr-only" for="search-input-settings-modal">{$i18n.t('Search')}</label>
+				<input
+					bind:this={searchInput}
+					data-settings-search
+					class="w-full text-xs bg-transparent py-1 outline-hidden placeholder:text-gray-600 dark:text-gray-300 dark:placeholder:text-gray-500"
+					bind:value={search}
+					id="search-input-settings-modal"
+					on:keydown={searchKeydown}
+					placeholder={$i18n.t('Search')}
+				/>
+			</div>
+		{/if}
 
 		<div class="sr-only" role="status" aria-live="polite">
 			{search
@@ -555,231 +609,235 @@
 			class="tabs scrollbar-none max-h-32 md:max-h-none flex min-w-0 flex-1 min-h-0 overflow-x-auto md:overflow-x-hidden md:overflow-y-auto md:flex-col p-1 pl-0 md:pl-1 gap-px"
 		>
 			<span
-				class="hidden md:block text-[0.625rem] text-gray-400 dark:text-gray-600 px-2 mt-1.5 mb-0.5"
+				class="hidden md:block text-[0.625rem] text-gray-600 dark:text-gray-500 px-2 mt-1.5 mb-0.5"
 			>
 				{$i18n.t('Personal')}
 			</span>
 
 			{#if filteredPersonalSettings.length > 0}
-				{#each filteredPersonalSettings as tabId, index (tabId)}
-					{#if shouldShowSettingGroup(filteredPersonalSettings, index)}
-						<span class={settingGroupHeadingClass(index === 0)}>
-							{settingGroupTitle(tabId)}
-						</span>
-					{/if}
+				<div role="tablist" aria-label={$i18n.t('Personal')} class="contents">
+					{#each filteredPersonalSettings as tabId, index (tabId)}
+						{#if shouldShowSettingGroup(filteredPersonalSettings, index)}
+							<span class={settingGroupHeadingClass(index === 0)}>
+								{settingGroupTitle(tabId)}
+							</span>
+						{/if}
 
-					{#if tabId === 'general'}
-						<button
-							role="tab"
-							aria-controls="tab-general"
-							aria-selected={selectedTab === 'general'}
-							class={tabButtonClass(selectedTab === 'general')}
-							on:click={() => {
-								selectTab('general');
-							}}
-						>
-							<SettingsAlt className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.general.title')}</span>
-						</button>
-					{:else if tabId === 'interface'}
-						<button
-							role="tab"
-							aria-controls="tab-interface"
-							aria-selected={selectedTab === 'interface'}
-							class={tabButtonClass(selectedTab === 'interface')}
-							on:click={() => {
-								selectTab('interface');
-							}}
-						>
-							<AdjustmentsHorizontal className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.interface.title')}</span>
-						</button>
-					{:else if tabId === 'notifications'}
-						<button
-							role="tab"
-							aria-controls="tab-notifications"
-							aria-selected={selectedTab === 'notifications'}
-							class={tabButtonClass(selectedTab === 'notifications')}
-							on:click={() => {
-								selectTab('notifications');
-							}}
-						>
-							<AppNotification className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.notifications.title')}</span>
-						</button>
-					{:else if tabId === 'shortcuts'}
-						<button
-							role="tab"
-							aria-controls="tab-shortcuts"
-							aria-selected={selectedTab === 'shortcuts'}
-							class={tabButtonClass(selectedTab === 'shortcuts')}
-							on:click={() => {
-								selectTab('shortcuts');
-							}}
-						>
-							<Keyboard className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.shortcuts.title')}</span>
-						</button>
-					{:else if tabId === 'connections'}
-						{#if $user?.role === 'admin' || ($user?.role === 'user' && $config?.features?.enable_direct_connections)}
+						{#if tabId === 'general'}
 							<button
 								role="tab"
-								aria-controls="tab-connections"
-								aria-selected={selectedTab === 'connections'}
-								class={tabButtonClass(selectedTab === 'connections')}
+								aria-controls="tab-general"
+								aria-selected={selectedTab === 'general'}
+								class={tabButtonClass(selectedTab === 'general')}
 								on:click={() => {
-									selectTab('connections');
+									selectTab('general');
 								}}
 							>
-								<Link className="size-3.5" strokeWidth="2" />
-								<span>{$i18n.t('settings.personal.connections.title')}</span>
+								<SettingsAlt className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.general.title')}</span>
 							</button>
-						{/if}
-					{:else if tabId === 'tools'}
-						{#if $user?.role === 'admin' || ($user?.role === 'user' && $user?.permissions?.features?.direct_tool_servers)}
+						{:else if tabId === 'interface'}
 							<button
 								role="tab"
-								aria-controls="tab-tools"
-								aria-selected={selectedTab === 'tools'}
-								class={tabButtonClass(selectedTab === 'tools')}
+								aria-controls="tab-interface"
+								aria-selected={selectedTab === 'interface'}
+								class={tabButtonClass(selectedTab === 'interface')}
 								on:click={() => {
-									selectTab('tools');
+									selectTab('interface');
 								}}
 							>
-								<WrenchAlt className="size-3.5" strokeWidth="2" />
-								<span>{$i18n.t('settings.personal.tools.title')}</span>
+								<AdjustmentsHorizontal className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.interface.title')}</span>
+							</button>
+						{:else if tabId === 'notifications'}
+							<button
+								role="tab"
+								aria-controls="tab-notifications"
+								aria-selected={selectedTab === 'notifications'}
+								class={tabButtonClass(selectedTab === 'notifications')}
+								on:click={() => {
+									selectTab('notifications');
+								}}
+							>
+								<AppNotification className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.notifications.title')}</span>
+							</button>
+						{:else if tabId === 'shortcuts'}
+							<button
+								role="tab"
+								aria-controls="tab-shortcuts"
+								aria-selected={selectedTab === 'shortcuts'}
+								class={tabButtonClass(selectedTab === 'shortcuts')}
+								on:click={() => {
+									selectTab('shortcuts');
+								}}
+							>
+								<Keyboard className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.shortcuts.title')}</span>
+							</button>
+						{:else if tabId === 'connections'}
+							{#if $user?.role === 'admin' || ($user?.role === 'user' && $config?.features?.enable_direct_connections)}
+								<button
+									role="tab"
+									aria-controls="tab-connections"
+									aria-selected={selectedTab === 'connections'}
+									class={tabButtonClass(selectedTab === 'connections')}
+									on:click={() => {
+										selectTab('connections');
+									}}
+								>
+									<Link className="size-3.5" strokeWidth="2" />
+									<span>{$i18n.t('settings.personal.connections.title')}</span>
+								</button>
+							{/if}
+						{:else if tabId === 'tools'}
+							{#if $user?.role === 'admin' || ($user?.role === 'user' && $user?.permissions?.features?.direct_tool_servers)}
+								<button
+									role="tab"
+									aria-controls="tab-tools"
+									aria-selected={selectedTab === 'tools'}
+									class={tabButtonClass(selectedTab === 'tools')}
+									on:click={() => {
+										selectTab('tools');
+									}}
+								>
+									<WrenchAlt className="size-3.5" strokeWidth="2" />
+									<span>{$i18n.t('settings.personal.tools.title')}</span>
+								</button>
+							{/if}
+						{:else if tabId === 'personalization'}
+							<button
+								role="tab"
+								aria-controls="tab-personalization"
+								aria-selected={selectedTab === 'personalization'}
+								class={tabButtonClass(selectedTab === 'personalization')}
+								on:click={() => {
+									selectTab('personalization');
+								}}
+							>
+								<Face className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.personalization.title')}</span>
+							</button>
+						{:else if tabId === 'audio'}
+							<button
+								role="tab"
+								aria-controls="tab-audio"
+								aria-selected={selectedTab === 'audio'}
+								class={tabButtonClass(selectedTab === 'audio')}
+								on:click={() => {
+									selectTab('audio');
+								}}
+							>
+								<SoundHigh className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.audio.title')}</span>
+							</button>
+						{:else if tabId === 'data_controls'}
+							<button
+								role="tab"
+								aria-controls="tab-data-controls"
+								aria-selected={selectedTab === 'data_controls'}
+								class={tabButtonClass(selectedTab === 'data_controls')}
+								on:click={() => {
+									selectTab('data_controls');
+								}}
+							>
+								<DatabaseSettings className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.dataControls.title')}</span>
+							</button>
+						{:else if tabId === 'usage'}
+							<button
+								role="tab"
+								aria-controls="tab-usage"
+								aria-selected={selectedTab === 'usage'}
+								class={tabButtonClass(selectedTab === 'usage')}
+								on:click={() => {
+									selectTab('usage');
+								}}
+							>
+								<UsageIcon className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.usage.title')}</span>
+							</button>
+						{:else if tabId === 'archived_chats'}
+							<button
+								role="tab"
+								aria-controls="tab-archived-chats"
+								aria-selected={selectedTab === 'archived_chats'}
+								class={tabButtonClass(selectedTab === 'archived_chats')}
+								on:click={() => {
+									selectTab('archived_chats');
+								}}
+							>
+								<ArchiveBox className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.archivedChats.title')}</span>
+							</button>
+						{:else if tabId === 'account'}
+							<button
+								role="tab"
+								aria-controls="tab-account"
+								aria-selected={selectedTab === 'account'}
+								class={tabButtonClass(selectedTab === 'account')}
+								on:click={() => {
+									selectTab('account');
+								}}
+							>
+								<UserCircle className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.account.title')}</span>
+							</button>
+						{:else if tabId === 'about'}
+							<button
+								role="tab"
+								aria-controls="tab-about"
+								aria-selected={selectedTab === 'about'}
+								class={tabButtonClass(selectedTab === 'about')}
+								on:click={() => {
+									selectTab('about');
+								}}
+							>
+								<InfoCircle className="size-3.5" strokeWidth="2" />
+								<span>{$i18n.t('settings.personal.about.title')}</span>
 							</button>
 						{/if}
-					{:else if tabId === 'personalization'}
-						<button
-							role="tab"
-							aria-controls="tab-personalization"
-							aria-selected={selectedTab === 'personalization'}
-							class={tabButtonClass(selectedTab === 'personalization')}
-							on:click={() => {
-								selectTab('personalization');
-							}}
-						>
-							<Face className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.personalization.title')}</span>
-						</button>
-					{:else if tabId === 'audio'}
-						<button
-							role="tab"
-							aria-controls="tab-audio"
-							aria-selected={selectedTab === 'audio'}
-							class={tabButtonClass(selectedTab === 'audio')}
-							on:click={() => {
-								selectTab('audio');
-							}}
-						>
-							<SoundHigh className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.audio.title')}</span>
-						</button>
-					{:else if tabId === 'data_controls'}
-						<button
-							role="tab"
-							aria-controls="tab-data-controls"
-							aria-selected={selectedTab === 'data_controls'}
-							class={tabButtonClass(selectedTab === 'data_controls')}
-							on:click={() => {
-								selectTab('data_controls');
-							}}
-						>
-							<DatabaseSettings className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.dataControls.title')}</span>
-						</button>
-					{:else if tabId === 'usage'}
-						<button
-							role="tab"
-							aria-controls="tab-usage"
-							aria-selected={selectedTab === 'usage'}
-							class={tabButtonClass(selectedTab === 'usage')}
-							on:click={() => {
-								selectTab('usage');
-							}}
-						>
-							<UsageIcon className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.usage.title')}</span>
-						</button>
-					{:else if tabId === 'archived_chats'}
-						<button
-							role="tab"
-							aria-controls="tab-archived-chats"
-							aria-selected={selectedTab === 'archived_chats'}
-							class={tabButtonClass(selectedTab === 'archived_chats')}
-							on:click={() => {
-								selectTab('archived_chats');
-							}}
-						>
-							<ArchiveBox className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.archivedChats.title')}</span>
-						</button>
-					{:else if tabId === 'account'}
-						<button
-							role="tab"
-							aria-controls="tab-account"
-							aria-selected={selectedTab === 'account'}
-							class={tabButtonClass(selectedTab === 'account')}
-							on:click={() => {
-								selectTab('account');
-							}}
-						>
-							<UserCircle className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.account.title')}</span>
-						</button>
-					{:else if tabId === 'about'}
-						<button
-							role="tab"
-							aria-controls="tab-about"
-							aria-selected={selectedTab === 'about'}
-							class={tabButtonClass(selectedTab === 'about')}
-							on:click={() => {
-								selectTab('about');
-							}}
-						>
-							<InfoCircle className="size-3.5" strokeWidth="2" />
-							<span>{$i18n.t('settings.personal.about.title')}</span>
-						</button>
-					{/if}
-				{/each}
+					{/each}
+				</div>
 			{/if}
 
 			{#if $user?.role === 'admin' && filteredAdminSettings.length > 0}
 				<div
 					class="hidden md:block shrink-0 self-stretch h-px mx-1 my-2 bg-gray-100/40 dark:bg-white/[0.025]"
 				></div>
-				<span class="hidden md:block text-[0.625rem] text-gray-400 dark:text-gray-600 px-2 mb-0.5">
+				<span class="hidden md:block text-[0.625rem] text-gray-600 dark:text-gray-500 px-2 mb-0.5">
 					{$i18n.t('Admin')}
 				</span>
 
-				{#each filteredAdminSettings as tabId, index (tabId)}
-					{#if shouldShowSettingGroup(filteredAdminSettings, index)}
-						<span class={settingGroupHeadingClass(index === 0)}>
-							{settingGroupTitle(tabId)}
-						</span>
-					{/if}
+				<div role="tablist" aria-label={$i18n.t('Admin')} class="contents">
+					{#each filteredAdminSettings as tabId, index (tabId)}
+						{#if shouldShowSettingGroup(filteredAdminSettings, index)}
+							<span class={settingGroupHeadingClass(index === 0)}>
+								{settingGroupTitle(tabId)}
+							</span>
+						{/if}
 
-					{@const tab = adminSettings.find((setting) => setting.id === tabId)}
-					{#if tab}
-						<button
-							role="tab"
-							aria-controls={adminTabPanelId(tab.id)}
-							aria-selected={selectedTab === tab.id}
-							class={tabButtonClass(selectedTab === tab.id)}
-							on:click={() => {
-								selectTab(tab.id);
-							}}
-						>
-							<AdminTabIcon id={adminTabSegment(tab.id)} className="size-3.5" strokeWidth="2" />
-							<span>{tab.title}</span>
-						</button>
-					{/if}
-				{/each}
+						{@const tab = adminSettings.find((setting) => setting.id === tabId)}
+						{#if tab}
+							<button
+								role="tab"
+								aria-controls={adminTabPanelId(tab.id)}
+								aria-selected={selectedTab === tab.id}
+								class={tabButtonClass(selectedTab === tab.id)}
+								on:click={() => {
+									selectTab(tab.id);
+								}}
+							>
+								<AdminTabIcon id={adminTabSegment(tab.id)} className="size-3.5" strokeWidth="2" />
+								<span>{tab.title}</span>
+							</button>
+						{/if}
+					{/each}
+				</div>
 			{/if}
 
 			{#if filteredSettings.length === 0}
-				<div class="px-2 py-1 text-xs text-gray-400 dark:text-gray-600">
+				<div class="px-2 py-1 text-xs text-gray-600 dark:text-gray-500">
 					{$i18n.t('No matches')}
 				</div>
 			{/if}
@@ -787,7 +845,10 @@
 	</nav>
 
 	<div class="flex-1 min-w-0 min-h-0 p-4 md:px-5 flex flex-col">
-		<div class="flex-1 min-h-0 overflow-hidden">
+		<div
+			class="flex-1 min-h-0 overflow-hidden"
+			id={isAdminTab(selectedTab) ? adminTabPanelId(selectedTab) : undefined}
+		>
 			{#if selectedTab === 'general'}
 				<General
 					{getModels}
@@ -870,6 +931,8 @@
 				<AdminAnalytics />
 			{:else if selectedTab === 'admin:integrations'}
 				<AdminIntegrations {saveSettings} />
+			{:else if selectedTab === 'admin:apps'}
+				<AdminApps />
 			{:else if selectedTab === 'admin:documents'}
 				<AdminDocuments on:save={adminConfigSaveHandler} />
 			{:else if selectedTab === 'admin:web'}
@@ -878,7 +941,7 @@
 				<AdminCodeExecution saveHandler={adminConfigSaveHandler} />
 			{:else if selectedTab === 'admin:interface'}
 				<AdminInterface
-					on:save={() => {
+					saveHandler={() => {
 						toast.success($i18n.t('Settings saved successfully!'));
 					}}
 				/>

@@ -31,6 +31,7 @@
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import SettingsSelect from '$lib/components/common/SettingsSelect.svelte';
+	import Collapsible from '$lib/components/common/Collapsible.svelte';
 	import AdminSettingField from './AdminSettingField.svelte';
 	import AdminSettingRow from './AdminSettingRow.svelte';
 	import AdminSettingSection from './AdminSettingSection.svelte';
@@ -43,10 +44,13 @@
 	let showResetConfirm = false;
 	let showResetUploadDirConfirm = false;
 	let showReindexConfirm = false;
+	let showEmbeddingAdvanced = false;
 	let showExternalDocumentLoaderHeadersHint = false;
 
 	let RAG_EMBEDDING_ENGINE = '';
 	let RAG_EMBEDDING_MODEL = '';
+	let RAG_EMBEDDING_QUERY_PREFIX = '';
+	let RAG_EMBEDDING_CONTENT_PREFIX = '';
 	let RAG_EMBEDDING_BATCH_SIZE = 1;
 	let ENABLE_ASYNC_EMBEDDING = true;
 	let RAG_EMBEDDING_CONCURRENT_REQUESTS = 0;
@@ -126,6 +130,8 @@
 		const payload: Parameters<typeof updateEmbeddingConfig>[1] = {
 			RAG_EMBEDDING_ENGINE: RAG_EMBEDDING_ENGINE,
 			RAG_EMBEDDING_MODEL: RAG_EMBEDDING_MODEL,
+			RAG_EMBEDDING_QUERY_PREFIX,
+			RAG_EMBEDDING_CONTENT_PREFIX,
 			RAG_EMBEDDING_BATCH_SIZE: RAG_EMBEDDING_BATCH_SIZE,
 			ENABLE_ASYNC_EMBEDDING: ENABLE_ASYNC_EMBEDDING,
 			RAG_EMBEDDING_CONCURRENT_REQUESTS: RAG_EMBEDDING_CONCURRENT_REQUESTS
@@ -169,10 +175,7 @@
 			toast.error($i18n.t('External Document Loader URL required.'));
 			return;
 		}
-		if (
-			RAGConfig.CONTENT_EXTRACTION_ENGINE === 'external' &&
-			RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS
-		) {
+		if (RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS) {
 			try {
 				const headers = JSON.parse(RAGConfig.EXTERNAL_DOCUMENT_LOADER_HEADERS);
 				if (headers === null || typeof headers !== 'object' || Array.isArray(headers)) {
@@ -260,6 +263,18 @@
 				return;
 			}
 		}
+		if (RAGConfig.MISTRAL_OCR_PARAMS) {
+			try {
+				JSON.parse(RAGConfig.MISTRAL_OCR_PARAMS);
+			} catch {
+				toast.error(
+					$i18n.t('Invalid JSON format in {{NAME}}', {
+						NAME: $i18n.t('Mistral OCR Parameters')
+					})
+				);
+				return;
+			}
+		}
 
 		const res = await updateRAGConfig(localStorage.token, {
 			...RAGConfig,
@@ -287,6 +302,11 @@
 					: RAGConfig.CONTENT_EXTRACTION_SUPPORTED_MEDIA_MIME_TYPES.split(',')
 							.map((mimeType: string) => mimeType.trim())
 							.filter((mimeType: string) => mimeType !== ''),
+			MISTRAL_OCR_PARAMS:
+				typeof RAGConfig.MISTRAL_OCR_PARAMS === 'string' &&
+				RAGConfig.MISTRAL_OCR_PARAMS.trim() !== ''
+					? JSON.parse(RAGConfig.MISTRAL_OCR_PARAMS)
+					: {},
 			MINERU_PARAMS:
 				typeof RAGConfig.MINERU_PARAMS === 'string' && RAGConfig.MINERU_PARAMS.trim() !== ''
 					? JSON.parse(RAGConfig.MINERU_PARAMS)
@@ -304,6 +324,9 @@
 		if (embeddingConfig) {
 			RAG_EMBEDDING_ENGINE = embeddingConfig.RAG_EMBEDDING_ENGINE;
 			RAG_EMBEDDING_MODEL = embeddingConfig.RAG_EMBEDDING_MODEL;
+			RAG_EMBEDDING_QUERY_PREFIX = embeddingConfig.RAG_EMBEDDING_QUERY_PREFIX ?? '';
+			RAG_EMBEDDING_CONTENT_PREFIX = embeddingConfig.RAG_EMBEDDING_CONTENT_PREFIX ?? '';
+			showEmbeddingAdvanced = Boolean(RAG_EMBEDDING_QUERY_PREFIX || RAG_EMBEDDING_CONTENT_PREFIX);
 			RAG_EMBEDDING_BATCH_SIZE = embeddingConfig.RAG_EMBEDDING_BATCH_SIZE ?? 1;
 			ENABLE_ASYNC_EMBEDDING = embeddingConfig.ENABLE_ASYNC_EMBEDDING ?? true;
 			RAG_EMBEDDING_CONCURRENT_REQUESTS = embeddingConfig.RAG_EMBEDDING_CONCURRENT_REQUESTS ?? 0;
@@ -334,6 +357,11 @@
 			typeof config.MINERU_PARAMS === 'object'
 				? JSON.stringify(config.MINERU_PARAMS ?? {}, null, 2)
 				: config.MINERU_PARAMS;
+
+		config.MISTRAL_OCR_PARAMS =
+			typeof config.MISTRAL_OCR_PARAMS === 'object'
+				? JSON.stringify(config.MISTRAL_OCR_PARAMS ?? {}, null, 2)
+				: config.MISTRAL_OCR_PARAMS;
 
 		config.EXTERNAL_DOCUMENT_LOADER_HEADERS =
 			typeof config.EXTERNAL_DOCUMENT_LOADER_HEADERS === 'object'
@@ -441,8 +469,12 @@
 				<AdminSettingRow
 					label={$i18n.t('settings.admin.documents.contentExtractionEngine.label')}
 					description={$i18n.t('settings.admin.documents.contentExtractionEngine.description')}
+					let:labelId
 				>
-					<SettingsSelect bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}>
+					<SettingsSelect
+						id={`${labelId}-control`}
+						bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}
+					>
 						<option value=""
 							>{$config?.features?.slim === true
 								? $i18n.t('Basic text only')
@@ -482,8 +514,9 @@
 					<AdminSettingRow
 						label={$i18n.t('settings.admin.documents.pdfLoaderMode.label')}
 						description={$i18n.t('settings.admin.documents.pdfLoaderMode.description')}
+						let:labelId
 					>
-						<SettingsSelect bind:value={RAGConfig.PDF_LOADER_MODE}>
+						<SettingsSelect id={`${labelId}-control`} bind:value={RAGConfig.PDF_LOADER_MODE}>
 							<option value="page">{$i18n.t('Page')}</option>
 							<option value="single">{$i18n.t('Single')}</option>
 						</SettingsSelect>
@@ -589,8 +622,12 @@
 					<AdminSettingRow
 						label={$i18n.t('settings.admin.documents.outputFormat.label')}
 						description={$i18n.t('settings.admin.documents.outputFormat.description')}
+						let:labelId
 					>
-						<SettingsSelect bind:value={RAGConfig.DATALAB_MARKER_OUTPUT_FORMAT}>
+						<SettingsSelect
+							id={`${labelId}-control`}
+							bind:value={RAGConfig.DATALAB_MARKER_OUTPUT_FORMAT}
+						>
 							<option value="markdown">{$i18n.t('Markdown')}</option>
 							<option value="json">{$i18n.t('JSON')}</option>
 							<option value="html">{$i18n.t('HTML')}</option>
@@ -788,6 +825,17 @@
 					>
 						<Switch bind:state={RAGConfig.MISTRAL_OCR_USE_BASE64} ariaLabelledbyId={labelId} />
 					</AdminSettingRow>
+					<AdminSettingField
+						label={$i18n.t('settings.admin.documents.mistralOcrParams.label')}
+						description={$i18n.t('settings.admin.documents.mistralOcrParams.description')}
+					>
+						<Textarea
+							className={textareaClass}
+							bind:value={RAGConfig.MISTRAL_OCR_PARAMS}
+							placeholder={$i18n.t('Enter additional parameters in JSON format')}
+							minSize={100}
+						/>
+					</AdminSettingField>
 				{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'paddleocr_vl'}
 					<div class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
 						<AdminSettingField
@@ -816,8 +864,10 @@
 					<AdminSettingRow
 						label={$i18n.t('settings.admin.documents.apiMode.label')}
 						description={$i18n.t('settings.admin.documents.apiMode.description')}
+						let:labelId
 					>
 						<SettingsSelect
+							id={`${labelId}-control`}
 							bind:value={RAGConfig.MINERU_API_MODE}
 							on:change={() => {
 								const cloudUrl = 'https://mineru.net/api/v4';
@@ -867,8 +917,10 @@
 					<AdminSettingRow
 						label={$i18n.t('settings.admin.documents.apiTimeout.label')}
 						description={$i18n.t('settings.admin.documents.apiTimeout.description')}
+						let:labelId
 					>
 						<input
+							id={`${labelId}-control`}
 							class="w-16 rounded-lg border border-gray-100/50 bg-gray-50/40 px-2 text-right text-xs text-gray-700 outline-hidden transition-colors focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-gray-300 dark:focus:border-blue-500"
 							type="number"
 							min="1"
@@ -918,8 +970,9 @@
 					<AdminSettingRow
 						label={$i18n.t('settings.admin.documents.textSplitter.label')}
 						description={$i18n.t('settings.admin.documents.textSplitter.description')}
+						let:labelId
 					>
-						<SettingsSelect bind:value={RAGConfig.TEXT_SPLITTER}>
+						<SettingsSelect id={`${labelId}-control`} bind:value={RAGConfig.TEXT_SPLITTER}>
 							<option value="">{$i18n.t('Default')} ({$i18n.t('Character')})</option>
 							<option value="token">{$i18n.t('Token')} ({$i18n.t('Tiktoken')})</option>
 							<option value="token_transformers" disabled={$config?.features?.slim === true}>
@@ -1006,8 +1059,10 @@
 					<AdminSettingRow
 						label={$i18n.t('settings.admin.documents.embeddingModelEngine.label')}
 						description={$i18n.t('settings.admin.documents.embeddingModelEngine.description')}
+						let:labelId
 					>
 						<SettingsSelect
+							id={`${labelId}-control`}
 							bind:value={RAG_EMBEDDING_ENGINE}
 							placeholder={$i18n.t('Select an embedding model engine')}
 							on:change={(e) => {
@@ -1174,8 +1229,10 @@
 					<AdminSettingRow
 						label={$i18n.t('settings.admin.documents.embeddingBatchSize.label')}
 						description={$i18n.t('settings.admin.documents.embeddingBatchSize.description')}
+						let:labelId
 					>
 						<input
+							id={`${labelId}-control`}
 							bind:value={RAG_EMBEDDING_BATCH_SIZE}
 							type="number"
 							class="w-14 bg-transparent text-center text-xs outline-none"
@@ -1198,8 +1255,10 @@
 							description={$i18n.t(
 								'settings.admin.documents.embeddingConcurrentRequests.description'
 							)}
+							let:labelId
 						>
 							<input
+								id={`${labelId}-control`}
 								bind:value={RAG_EMBEDDING_CONCURRENT_REQUESTS}
 								type="number"
 								class="w-14 bg-transparent text-center text-xs outline-none"
@@ -1208,6 +1267,40 @@
 							/>
 						</AdminSettingRow>
 					{/if}
+
+					<Collapsible
+						title={$i18n.t('Advanced')}
+						bind:open={showEmbeddingAdvanced}
+						buttonClassName="w-full py-1 text-xs text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-colors"
+					>
+						<div slot="content" class="flex flex-col gap-2.5 pt-2.5">
+							<AdminSettingField
+								label={$i18n.t('settings.admin.documents.embeddingQueryPrefix.label')}
+								description={$i18n.t('settings.admin.documents.embeddingQueryPrefix.description')}
+								forId="embedding-query-prefix"
+							>
+								<input
+									id="embedding-query-prefix"
+									class={inputClass}
+									placeholder={$i18n.t('Optional')}
+									bind:value={RAG_EMBEDDING_QUERY_PREFIX}
+								/>
+							</AdminSettingField>
+
+							<AdminSettingField
+								label={$i18n.t('settings.admin.documents.embeddingContentPrefix.label')}
+								description={$i18n.t('settings.admin.documents.embeddingContentPrefix.description')}
+								forId="embedding-content-prefix"
+							>
+								<input
+									id="embedding-content-prefix"
+									class={inputClass}
+									placeholder={$i18n.t('Optional')}
+									bind:value={RAG_EMBEDDING_CONTENT_PREFIX}
+								/>
+							</AdminSettingField>
+						</div>
+					</Collapsible>
 				</AdminSettingSection>
 			{/if}
 
@@ -1247,8 +1340,10 @@
 							<AdminSettingRow
 								label={$i18n.t('settings.admin.documents.rerankingEngine.label')}
 								description={$i18n.t('settings.admin.documents.rerankingEngine.description')}
+								let:labelId
 							>
 								<SettingsSelect
+									id={`${labelId}-control`}
 									bind:value={RAGConfig.RAG_RERANKING_ENGINE}
 									placeholder={$i18n.t('Select a reranking model engine')}
 									on:change={(e) => {
@@ -1316,8 +1411,10 @@
 						<AdminSettingRow
 							label={$i18n.t('settings.admin.documents.rerankingBatchSize.label')}
 							description={$i18n.t('settings.admin.documents.rerankingBatchSize.description')}
+							let:labelId
 						>
 							<input
+								id={`${labelId}-control`}
 								bind:value={RAGConfig.RAG_RERANKING_BATCH_SIZE}
 								type="number"
 								class="w-14 bg-transparent text-center text-xs outline-none"
@@ -1367,16 +1464,16 @@
 									placeholder={$i18n.t('Enter Score')}
 									bind:value={RAGConfig.RELEVANCE_THRESHOLD}
 									autocomplete="off"
-									min="0.0"
-									title={$i18n.t('The score should be a value between 0.0 (0%) and 1.0 (100%).')}
 								/>
 							</AdminSettingField>
 
 							<AdminSettingRow
+								let:labelId
 								label={$i18n.t('settings.admin.documents.bm25Weight.label')}
 								description={$i18n.t('settings.admin.documents.bm25Weight.description')}
 							>
 								<button
+									id={`${labelId}-control`}
 									class={actionButtonClass}
 									type="button"
 									on:click={() => {
@@ -1546,10 +1643,12 @@
 
 			<AdminSettingSection title={$i18n.t('settings.admin.documents.sections.dangerZone.title')}>
 				<AdminSettingRow
+					let:labelId
 					label={$i18n.t('settings.admin.documents.resetUploadDirectory.label')}
 					description={$i18n.t('settings.admin.documents.resetUploadDirectory.description')}
 				>
 					<button
+						id={`${labelId}-control`}
 						class={actionButtonClass}
 						type="button"
 						on:click={() => {
@@ -1560,10 +1659,12 @@
 					</button>
 				</AdminSettingRow>
 				<AdminSettingRow
+					let:labelId
 					label={$i18n.t('settings.admin.documents.resetVectorStorageKnowledge.label')}
 					description={$i18n.t('settings.admin.documents.resetVectorStorageKnowledge.description')}
 				>
 					<button
+						id={`${labelId}-control`}
 						class={actionButtonClass}
 						type="button"
 						on:click={() => {
@@ -1574,12 +1675,14 @@
 					</button>
 				</AdminSettingRow>
 				<AdminSettingRow
+					let:labelId
 					label={$i18n.t('settings.admin.documents.reindexKnowledgeAndMemoryVectors.label')}
 					description={$i18n.t(
 						'settings.admin.documents.reindexKnowledgeAndMemoryVectors.description'
 					)}
 				>
 					<button
+						id={`${labelId}-control`}
 						class={actionButtonClass}
 						type="button"
 						on:click={() => {
@@ -1594,7 +1697,7 @@
 
 		<div class="flex justify-end pt-6 text-sm font-normal">
 			<button
-				class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+				class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 				type="submit"
 			>
 				{$i18n.t('Save')}

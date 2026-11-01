@@ -37,6 +37,7 @@ from open_webui.models.messages import MessageForm
 from open_webui.models.users import Users
 from open_webui.utils.auth import create_token
 from open_webui.utils.misc import parse_duration
+from open_webui.utils.models import get_all_models
 from open_webui.utils.recurrence import (
     _resolve_tz,
     next_n_runs_ns,
@@ -260,6 +261,13 @@ async def _execute_channel_automation(
     if not channel_id or not await Config.get('channels.enable'):
         raise ValueError('Channel not found')
 
+    from open_webui.utils.access_control import has_permission
+
+    if user.role != 'admin' and not await has_permission(
+        user.id, 'features.channels', await Config.get('user.permissions')
+    ):
+        raise ValueError('Owner no longer permitted to use channels')
+
     model = getattr(app.state, 'MODELS', {}).get(model_id, {})
     request = _build_request(app, token=token)
 
@@ -349,6 +357,7 @@ async def execute_automation(app, automation: AutomationModel) -> None:
     session_id + chat_id + message_id → async task → pipeline handles everything
     (filters, model params, knowledge/RAG, tools, DB saves, webhooks).
     """
+    chat = None
     try:
         user = await Users.get_user_by_id(automation.user_id)
         if not user:
@@ -375,7 +384,7 @@ async def execute_automation(app, automation: AutomationModel) -> None:
                 EVENTS.AUTOMATION_RUN_FAILED,
                 actor=user,
                 subject_id=automation.id,
-                data={'name': automation.name, 'error': error},
+                data={'name': automation.name, 'error': error, 'message': f'{automation.name}: {error}'},
             )
             return
 
@@ -385,10 +394,18 @@ async def execute_automation(app, automation: AutomationModel) -> None:
             expires_delta = parse_duration(str(await Config.get('automations.auth_token_expires_in', '1h')))
         except ValueError:
             expires_delta = None
+        from open_webui.models.auths import Auths
+
+        auth = await Auths.get_auth_by_id(user.id)
+        if auth is None or not auth.active:
+            raise ValueError('Automation owner is no longer active')
         token = create_token(
-            data={'id': user.id, 'typ': 'automation'},
+            data={'id': user.id, 'typ': 'automation', 'session_stamp': auth.session_stamp},
             expires_delta=expires_delta or timedelta(hours=1),
         )
+
+        if not app.state.MODELS:
+            await get_all_models(_build_request(app, token=token), user=user)
 
         target = automation.data.get('target') or {}
         if target.get('type') == 'channel':
@@ -453,7 +470,7 @@ async def execute_automation(app, automation: AutomationModel) -> None:
                 EVENTS.AUTOMATION_RUN_FAILED,
                 actor=user,
                 subject_id=automation.id,
-                data={'name': automation.name, 'error': error},
+                data={'name': automation.name, 'error': error, 'message': f'{automation.name}: {error}'},
             )
             return
 
@@ -489,10 +506,27 @@ async def execute_automation(app, automation: AutomationModel) -> None:
             'automation_id': automation.id,
             'background_tasks': {},
         }
+        # Match the chat UI's memory preference, including inherited defaults.
+        ui_settings = (user.settings.ui or {}) if user.settings else {}
+        memory = ui_settings.get('memory')
+        if memory is None:
+            defaults = await Config.get('ui.default_interface_settings') or {}
+            memory = defaults.get('memory')
+        if memory is None:
+            memory = await Config.get('memories.enable')
+        if memory:
+            form_data.setdefault('features', {})['memory'] = True
+
         # Call the full chat completion pipeline (same as POST /api/chat/completions).
         # The handler reference is stored on app.state to avoid circular imports.
         request = _build_request(app, token=token)
         await app.state.CHAT_COMPLETION_HANDLER(request, form_data, user=user)
+
+        reply = await Chats.get_message_by_id_and_message_id(chat.id, assistant_msg_id)
+        if reply and reply.get('error'):
+            raise ValueError(str(reply['error']['content']))
+        if not reply or not reply.get('done'):
+            raise ValueError('Automation reply did not complete')
 
         # Notify user
         from open_webui.socket.main import sio
@@ -517,16 +551,24 @@ async def execute_automation(app, automation: AutomationModel) -> None:
             data={'name': automation.name, 'chat_id': chat.id},
         )
 
-    except Exception as e:
+    except (Exception, asyncio.CancelledError) as e:
         log.exception(f'Automation {automation.id} failed')
-        error = str(e)[:4000]
-        await _record_run(automation.id, 'error', error=error)
+        error = 'Automation reply was cancelled' if isinstance(e, asyncio.CancelledError) else str(e)[:4000]
+        await _record_run(automation.id, 'error', chat_id=chat.id if chat else None, error=error)
         await publish_event(
             app,
             EVENTS.AUTOMATION_RUN_FAILED,
             subject_id=automation.id,
-            data={'name': automation.name, 'error': error},
+            data={
+                'name': automation.name,
+                'error': error,
+                'user_id': automation.user_id,
+                'message': f'{automation.name}: {error}',
+                **({'chat_id': chat.id} if chat else {}),
+            },
         )
+        if isinstance(e, asyncio.CancelledError):
+            raise
 
 
 ####################
@@ -557,7 +599,7 @@ async def _check_calendar_alerts(app) -> None:
 
     for event, user_tz in upcoming:
         # Skip if already alerted for this start time
-        if event.meta and event.meta.get('alerted_at'):
+        if event.meta and event.meta.get('alerted_at') == event.start_at:
             continue
 
         # Compute minutes until event starts
@@ -588,7 +630,7 @@ async def _check_calendar_alerts(app) -> None:
         try:
             await CalendarEvents.update_event_by_id(
                 event.id,
-                CalendarEventUpdateForm(meta={'alerted_at': now_ns}),
+                CalendarEventUpdateForm(meta={'alerted_at': event.start_at}),
             )
         except Exception:
             log.debug('Failed to mark event %s as alerted', event.id, exc_info=True)

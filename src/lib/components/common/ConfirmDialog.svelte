@@ -6,7 +6,7 @@
 	import { settings } from '$lib/stores';
 	import { matchKeybinding, Shortcut } from '$lib/shortcuts';
 
-	const i18n = getContext('i18n');
+	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
 	const dispatch = createEventDispatcher();
 
 	import { fade } from 'svelte/transition';
@@ -18,8 +18,8 @@
 	export let title = '';
 	export let message = '';
 
-	export let cancelLabel = $i18n.t('Cancel');
-	export let confirmLabel = $i18n.t('Confirm');
+	export let cancelLabel: string | undefined = undefined;
+	export let confirmLabel: string | undefined = undefined;
 
 	export let onConfirm = () => {};
 
@@ -41,6 +41,13 @@
 	let mounted = false;
 
 	let focusTrap: FocusTrap.FocusTrap | null = null;
+	let previousOverflow: string | null = null;
+	const restoreOverflow = () => {
+		if (previousOverflow !== null) {
+			document.body.style.overflow = previousOverflow;
+			previousOverflow = null;
+		}
+	};
 
 	const init = () => {
 		_inputValue = inputValue;
@@ -90,6 +97,7 @@
 			focusTrap.activate();
 
 			window.addEventListener('keydown', handleKeyDown);
+			previousOverflow = document.body.style.overflow;
 			document.body.style.overflow = 'hidden';
 		} else if (modalElement) {
 			focusTrap.deactivate();
@@ -97,12 +105,13 @@
 			window.removeEventListener('keydown', handleKeyDown);
 			document.body.removeChild(modalElement);
 
-			document.body.style.overflow = 'unset';
+			restoreOverflow();
 		}
 	}
 
 	onDestroy(() => {
 		show = false;
+		restoreOverflow();
 		window.removeEventListener('keydown', handleKeyDown);
 		if (focusTrap) {
 			focusTrap.deactivate();
@@ -136,7 +145,7 @@
 			}}
 		>
 			<div class="px-5 py-5 flex flex-col">
-				<div class="text-base font-medium dark:text-gray-200 mb-2.5">
+				<div class="text-sm font-medium dark:text-gray-200 mb-2.5">
 					{#if title !== ''}
 						{title}
 					{:else}
@@ -191,22 +200,22 @@
 
 				<div class="mt-5 flex justify-between gap-1.5">
 					<button
-						class="text-sm bg-gray-100 hover:bg-gray-100/70 text-gray-800 dark:bg-gray-850 dark:hover:bg-gray-850/60 dark:text-white font-normal w-full py-1.5 rounded-full transition"
+						class="flex h-7 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal transition disabled:opacity-60 bg-gray-100 hover:bg-gray-100/70 text-gray-800 dark:bg-gray-850 dark:hover:bg-gray-850/60 dark:text-white w-full"
 						on:click={() => {
 							cancelHandler();
 						}}
 						type="button"
 					>
-						{cancelLabel}
+						{cancelLabel ?? $i18n.t('Cancel')}
 					</button>
 					<button
-						class="text-sm bg-gray-900 hover:bg-gray-900/90 text-gray-100 dark:bg-gray-100 dark:hover:bg-gray-100/90 dark:text-gray-800 font-normal w-full py-1.5 rounded-full transition"
+						class="flex h-7 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white w-full"
 						on:click={() => {
 							confirmHandler();
 						}}
 						type="button"
 					>
-						{confirmLabel}
+						{confirmLabel ?? $i18n.t('Confirm')}
 					</button>
 				</div>
 			</div>

@@ -61,7 +61,7 @@
 					{$i18n.t('Add Memory')}
 				{/if}
 			</div>
-			<button class="self-center" on:click={() => (show = false)}>
+			<button aria-label={$i18n.t('Close')} class="self-center" on:click={() => (show = false)}>
 				<XMark className={'size-5'} />
 			</button>
 		</div>
@@ -116,9 +116,7 @@
 
 					<div class="flex justify-end pt-1 text-sm font-medium">
 						<button
-							class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex items-center gap-2 whitespace-nowrap {loading
-								? ' cursor-not-allowed'
-								: ''}"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white disabled:cursor-not-allowed"
 							type="submit"
 							disabled={loading}
 						>
@@ -130,7 +128,7 @@
 
 							{#if loading}
 								<span class="shrink-0">
-									<Spinner />
+									<Spinner className="size-3" />
 								</span>
 							{/if}
 						</button>

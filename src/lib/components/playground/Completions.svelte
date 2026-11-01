@@ -8,7 +8,7 @@
 	import { WEBUI_NAME, config, user, models, settings, showSidebar } from '$lib/stores';
 	import { chatCompletion } from '$lib/apis/openai';
 
-	import { splitStream } from '$lib/utils';
+	import { splitStream, resolveDefaultModelIds } from '$lib/utils';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 
 	const i18n = getContext('i18n');
@@ -108,13 +108,9 @@
 			await goto('/');
 		}
 
-		if ($settings?.models) {
-			selectedModelId = $settings?.models[0];
-		} else if ($config?.default_models) {
-			selectedModelId = $config?.default_models.split(',')[0];
-		} else {
-			selectedModelId = '';
-		}
+		selectedModelId =
+			resolveDefaultModelIds($models, $settings?.models, $config?.default_models?.split(','))[0] ??
+			'';
 		loaded = true;
 	});
 </script>
@@ -143,6 +139,7 @@
 				<div class="flex-1">
 					<select
 						class="bg-transparent border border-gray-100/30 dark:border-gray-850/30 rounded-lg py-1 px-2 -mx-0.5 text-sm outline-hidden w-full"
+						aria-label={$i18n.t('Model')}
 						bind:value={selectedModelId}
 					>
 						{#each $models as model}
@@ -154,7 +151,7 @@
 				<div class="flex gap-2 shrink-0 ml-2">
 					{#if !loading}
 						<button
-							class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-lg"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 							on:click={() => {
 								submitHandler();
 							}}
@@ -163,7 +160,7 @@
 						</button>
 					{:else}
 						<button
-							class="px-3.5 py-1.5 text-sm font-normal bg-gray-300 text-black transition rounded-lg flex items-center gap-2"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60 dark:text-gray-400 dark:hover:bg-gray-850 dark:hover:text-white"
 							on:click={() => {
 								stopResponse();
 							}}

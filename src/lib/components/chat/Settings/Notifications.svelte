@@ -1,4 +1,5 @@
 <script lang="ts">
+	import UserSettingRow from './UserSettingRow.svelte';
 	import { canUseNotificationTargets } from '$lib/utils/settings-access';
 	import { getContext, onMount } from 'svelte';
 	import type { Writable } from 'svelte/store';
@@ -26,16 +27,19 @@
 	let notificationEnabled = false;
 	let notificationSound = true;
 	let targets: NotificationTarget[] = [];
+	// Keep dynamically translated event keys visible to i18next-parser.
+	// $i18n.t('Chat finished'); $i18n.t('A chat run finished successfully.');
+	// $i18n.t('Chat failed'); $i18n.t('A chat run failed.');
 	let events: { event: string; label: string; description?: string }[] = [
 		{
 			event: 'chat.finished',
-			label: $i18n.t('Chat finished'),
-			description: $i18n.t('A chat run finished successfully.')
+			label: 'Chat finished',
+			description: 'A chat run finished successfully.'
 		},
 		{
 			event: 'chat.failed',
-			label: $i18n.t('Chat failed'),
-			description: $i18n.t('A chat run failed.')
+			label: 'Chat failed',
+			description: 'A chat run failed.'
 		}
 	];
 	let loadingTargets = false;
@@ -58,13 +62,13 @@
 	}
 
 	const toggleNotifications = async () => {
-		if (!notificationEnabled) {
+		if (notificationEnabled) {
 			const permission =
 				'Notification' in window ? await Notification.requestPermission() : 'denied';
 			if (permission === 'granted') {
-				notificationEnabled = true;
 				saveSettings({ notificationEnabled });
 			} else {
+				notificationEnabled = false;
 				toast.error(
 					$i18n.t(
 						'Response notifications cannot be activated as the website permissions have been denied. Please visit your browser settings to grant the necessary access.'
@@ -72,7 +76,6 @@
 				);
 			}
 		} else {
-			notificationEnabled = false;
 			saveSettings({ notificationEnabled });
 		}
 	};
@@ -195,32 +198,34 @@
 		</h2>
 
 		<div class="flex flex-col gap-2.5">
-			<label class="flex cursor-pointer items-center justify-between">
-				<span class="text-xs text-gray-600 dark:text-gray-400">
+			<UserSettingRow let:labelId>
+				<span slot="label">
 					{$i18n.t('settings.personal.notifications.browserNotifications.label')}
 				</span>
 				<Switch
-					state={notificationEnabled}
+					ariaLabelledbyId={labelId}
+					bind:state={notificationEnabled}
 					ariaLabel={$i18n.t('settings.personal.notifications.browserNotifications.label')}
 					on:change={toggleNotifications}
 				/>
-			</label>
+			</UserSettingRow>
 			<p class="-mt-1 text-[0.6875rem] text-gray-400 dark:text-gray-600">
 				{$i18n.t('Allow browser notifications for completed responses.')}
 			</p>
 
-			<label class="flex cursor-pointer items-center justify-between">
-				<span class="text-xs text-gray-600 dark:text-gray-400">
+			<UserSettingRow let:labelId>
+				<span slot="label">
 					{$i18n.t('settings.personal.notifications.notificationSound.label')}
 				</span>
 				<Switch
+					ariaLabelledbyId={labelId}
 					bind:state={notificationSound}
 					ariaLabel={$i18n.t('settings.personal.notifications.notificationSound.label')}
 					on:change={() => {
 						saveSettings({ notificationSound });
 					}}
 				/>
-			</label>
+			</UserSettingRow>
 
 			{#if canUseWebhooks}
 				<div class="mt-3 flex items-center justify-between">
@@ -249,14 +254,17 @@
 						{#each targets as target, index}
 							{@const alertLabels = events
 								.filter((event) => target.events.includes(event.event))
-								.map((event) => event.label)
+								.map((event) => $i18n.t(event.label))
 								.join(', ')}
-							<div class="flex items-center gap-3 px-1 py-1.5">
+							<div class="group/setting-row flex items-center gap-3 px-1 py-1.5">
 								<div class="min-w-0 flex-1">
 									<div class="flex min-w-0 items-center gap-2">
-										<span class="truncate text-[0.71875rem] text-gray-700 dark:text-gray-300">
+										<label
+											for={`notification-${target.id}-control`}
+											class="truncate text-[0.71875rem] text-gray-600 dark:text-gray-400 transition-colors duration-150 group-hover/setting-row:text-gray-900 group-focus-within/setting-row:text-gray-900 dark:group-hover/setting-row:text-white dark:group-focus-within/setting-row:text-white group-has-[button[id$=-control]:enabled]/setting-row:cursor-pointer group-has-[button[id$=-control]:disabled]/setting-row:cursor-not-allowed"
+										>
 											{target.id}
-										</span>
+										</label>
 										<span class="shrink-0 text-[0.625rem] text-gray-400 dark:text-gray-600">
 											{$i18n.t('Webhook')}
 										</span>
@@ -324,6 +332,7 @@
 
 								<div class="flex w-9 shrink-0 justify-end">
 									<Switch
+										id={`notification-${target.id}-control`}
 										state={target.enabled}
 										ariaLabel={$i18n.t('Enabled')}
 										on:change={(event) => patchTarget(target, { enabled: event.detail })}
@@ -388,7 +397,7 @@
 					type="button"
 					on:click={() => toggleFormEvent(event.event)}
 				>
-					{event.label}
+					{$i18n.t(event.label)}
 				</button>
 			{/each}
 		</div>
@@ -427,7 +436,7 @@
 				{$i18n.t('Cancel')}
 			</button>
 			<button
-				class="text-[0.8125rem] text-gray-700 transition-colors duration-100 hover:text-gray-900 disabled:opacity-30 dark:text-gray-300 dark:hover:text-white"
+				class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 				type="button"
 				on:click={saveTarget}
 				disabled={savingTarget || (!editingId && !form.url.trim())}

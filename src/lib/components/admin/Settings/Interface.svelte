@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getModels, getTaskConfig, updateTaskConfig } from '$lib/apis';
 	import { getChatConfig, updateChatConfig } from '$lib/apis/chats';
-	import { createEventDispatcher, onMount, getContext } from 'svelte';
+	import { onMount, getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 
 	import { getBaseModels } from '$lib/apis/models';
@@ -16,8 +16,11 @@
 	import AdminSettingRow from './AdminSettingRow.svelte';
 	import AdminSettingSection from './AdminSettingSection.svelte';
 	import { config as appConfig } from '$lib/stores';
+	import { setInterfaceVisibility } from '$lib/apis/configs';
+	import type { Visibility } from '$lib/utils/ui-visibility';
+	import VisibilitySettings from './Interface/Visibility.svelte';
 
-	const dispatch = createEventDispatcher();
+	export let saveHandler: () => void;
 
 	const i18n: any = getContext('i18n');
 
@@ -50,9 +53,15 @@
 		CONTEXT_COMPACTION_TOKEN_CAP: 80000,
 		CONTEXT_COMPACTION_RETENTION_PERCENTAGE: 40,
 		CONTEXT_COMPACTION_PROMPT_TEMPLATE: '',
-		ENABLE_TOOL_PERMISSIONS: false
+		ENABLE_TOOL_PERMISSIONS: false,
+		ENABLE_TOOL_SEARCH: false,
+		TOOL_SEARCH_DEFER_THRESHOLD: 400,
+		TOOL_SEARCH_ALWAYS_LOADED: [] as string[],
+		TOOL_SEARCH_DEFER_BUILTIN_TOOLS: true
 	};
+	let toolSearchAlwaysLoaded = '';
 	let showTaskParameters = false;
+	let visibility: Visibility = { ...($appConfig?.ui?.visibility ?? {}) };
 
 	const configuredParams = (params: Record<string, any> = {}) =>
 		Object.fromEntries(
@@ -67,22 +76,43 @@
 			TASK_MODEL_PARAMS: configuredParams(taskConfig.TASK_MODEL_PARAMS)
 		};
 
-		[taskConfig, chatConfig] = await Promise.all([
-			updateTaskConfig(localStorage.token, taskConfigPayload),
-			updateChatConfig(localStorage.token, chatConfig)
-		]);
+		try {
+			[taskConfig, chatConfig, visibility] = await Promise.all([
+				updateTaskConfig(localStorage.token, taskConfigPayload),
+				updateChatConfig(localStorage.token, {
+					...chatConfig,
+					TOOL_SEARCH_ALWAYS_LOADED: toolSearchAlwaysLoaded
+						.split(',')
+						.map((item) => item.trim())
+						.filter((item) => item !== '')
+				}),
+				setInterfaceVisibility(localStorage.token, visibility)
+			]);
+		} catch (error) {
+			toast.error(
+				Array.isArray(error) ? error.map((entry) => entry.msg).join('\n') : String(error)
+			);
+			return;
+		}
+		toolSearchAlwaysLoaded = (chatConfig.TOOL_SEARCH_ALWAYS_LOADED ?? []).join(', ');
 		appConfig.update((current) =>
 			current
 				? {
 						...current,
+						ui: { ...current.ui, visibility },
 						features: {
 							...current.features,
 							enable_context_compaction: chatConfig.ENABLE_CONTEXT_COMPACTION,
-							enable_tool_permissions: chatConfig.ENABLE_TOOL_PERMISSIONS
+							enable_tool_permissions: chatConfig.ENABLE_TOOL_PERMISSIONS,
+							enable_title_generation: taskConfig.ENABLE_TITLE_GENERATION,
+							enable_follow_up_generation: taskConfig.ENABLE_FOLLOW_UP_GENERATION,
+							enable_tags_generation: taskConfig.ENABLE_TAGS_GENERATION,
+							enable_autocomplete_generation: taskConfig.ENABLE_AUTOCOMPLETE_GENERATION
 						}
 					}
 				: current
 		);
+		saveHandler();
 	};
 
 	let workspaceModels: any[] = [];
@@ -123,6 +153,7 @@
 				getChatConfig(localStorage.token)
 			]);
 			taskConfig.TASK_MODEL_PARAMS = taskConfig.TASK_MODEL_PARAMS ?? {};
+			toolSearchAlwaysLoaded = (chatConfig.TOOL_SEARCH_ALWAYS_LOADED ?? []).join(', ');
 
 			workspaceModels = await getBaseModels(localStorage.token);
 			baseModels = await getModels(localStorage.token, null, false);
@@ -165,7 +196,6 @@
 		class="flex h-full flex-col justify-between text-sm"
 		on:submit|preventDefault={() => {
 			updateInterfaceHandler();
-			dispatch('save');
 		}}
 	>
 		<h2 class="text-sm font-medium text-gray-900 dark:text-white mb-4">
@@ -173,7 +203,8 @@
 		</h2>
 
 		<div class="flex-1 min-h-0 overflow-y-auto scrollbar-hover pr-1.5">
-			<AdminSettingSection title={$i18n.t('settings.admin.interface.sections.tasks.title')} first>
+			<VisibilitySettings bind:visibility />
+			<AdminSettingSection title={$i18n.t('settings.admin.interface.sections.tasks.title')}>
 				<div>
 					<div class="mb-2">
 						<div class="text-xs text-gray-600 dark:text-gray-400">
@@ -185,8 +216,12 @@
 					</div>
 
 					<div class="grid w-full grid-cols-1 gap-2.5 sm:grid-cols-2">
-						<AdminSettingField label={$i18n.t('settings.admin.interface.localTaskModel.label')}>
+						<AdminSettingField
+							label={$i18n.t('settings.admin.interface.localTaskModel.label')}
+							forId="task-model"
+						>
 							<SettingsSelect
+								id="task-model"
 								bind:value={taskConfig.TASK_MODEL}
 								className="w-full"
 								placeholder={$i18n.t('Select a model')}
@@ -204,8 +239,12 @@
 							</SettingsSelect>
 						</AdminSettingField>
 
-						<AdminSettingField label={$i18n.t('settings.admin.interface.externalTaskModel.label')}>
+						<AdminSettingField
+							label={$i18n.t('settings.admin.interface.externalTaskModel.label')}
+							forId="task-model-external"
+						>
 							<SettingsSelect
+								id="task-model-external"
 								bind:value={taskConfig.TASK_MODEL_EXTERNAL}
 								className="w-full"
 								placeholder={$i18n.t('Select a model')}
@@ -280,8 +319,10 @@
 					<AdminSettingField
 						label={$i18n.t('settings.admin.interface.contextCompactionModel.label')}
 						description={$i18n.t('settings.admin.interface.contextCompactionModel.description')}
+						forId="context-compaction-model"
 					>
 						<SettingsSelect
+							id="context-compaction-model"
 							bind:value={chatConfig.CONTEXT_COMPACTION_MODEL}
 							className="w-full"
 							placeholder={$i18n.t('Select a model')}
@@ -360,6 +401,59 @@
 							<code>{'{{MESSAGES}}'}</code>,
 							<code>{'{{CURRENT_DATE}}'}</code>
 						</div>
+					</AdminSettingField>
+				{/if}
+
+				<AdminSettingRow
+					label={$i18n.t('settings.admin.interface.toolSearch.label')}
+					description={$i18n.t('settings.admin.interface.toolSearch.description')}
+					let:labelId
+				>
+					<div slot="label" class="flex items-center gap-2">
+						<span>{$i18n.t('settings.admin.interface.toolSearch.label')}</span>
+						<ExperimentalBadge />
+					</div>
+					<Switch bind:state={chatConfig.ENABLE_TOOL_SEARCH} ariaLabelledbyId={labelId} />
+				</AdminSettingRow>
+
+				{#if chatConfig.ENABLE_TOOL_SEARCH}
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.interface.toolSearchDeferBuiltinTools.label')}
+						description={$i18n.t(
+							'settings.admin.interface.toolSearchDeferBuiltinTools.description'
+						)}
+						let:labelId
+					>
+						<Switch
+							bind:state={chatConfig.TOOL_SEARCH_DEFER_BUILTIN_TOOLS}
+							ariaLabelledbyId={labelId}
+						/>
+					</AdminSettingRow>
+
+					<AdminSettingField
+						label={$i18n.t('settings.admin.interface.toolSearchThreshold.label')}
+						description={$i18n.t('settings.admin.interface.toolSearchThreshold.description')}
+					>
+						<input
+							type="number"
+							min="0"
+							step="1"
+							class={inputClass}
+							bind:value={chatConfig.TOOL_SEARCH_DEFER_THRESHOLD}
+						/>
+					</AdminSettingField>
+
+					<AdminSettingField
+						label={$i18n.t('settings.admin.interface.toolSearchAlwaysLoaded.label')}
+						description={$i18n.t('settings.admin.interface.toolSearchAlwaysLoaded.description')}
+					>
+						<input
+							class={inputClass}
+							type="text"
+							placeholder={$i18n.t('settings.admin.interface.toolSearchAlwaysLoaded.placeholder')}
+							bind:value={toolSearchAlwaysLoaded}
+							autocomplete="off"
+						/>
 					</AdminSettingField>
 				{/if}
 			</AdminSettingSection>
@@ -468,16 +562,18 @@
 					/>
 				</AdminSettingRow>
 
-				<AdminSettingRow
-					label={$i18n.t('settings.admin.interface.webSearchQueryGeneration.label')}
-					description={$i18n.t('settings.admin.interface.webSearchQueryGeneration.description')}
-					let:labelId
-				>
-					<Switch
-						bind:state={taskConfig.ENABLE_SEARCH_QUERY_GENERATION}
-						ariaLabelledbyId={labelId}
-					/>
-				</AdminSettingRow>
+				{#if $appConfig?.features?.enable_web_search}
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.interface.webSearchQueryGeneration.label')}
+						description={$i18n.t('settings.admin.interface.webSearchQueryGeneration.description')}
+						let:labelId
+					>
+						<Switch
+							bind:state={taskConfig.ENABLE_SEARCH_QUERY_GENERATION}
+							ariaLabelledbyId={labelId}
+						/>
+					</AdminSettingRow>
+				{/if}
 
 				<AdminSettingField
 					label={$i18n.t('settings.admin.interface.queryGenerationPrompt.label')}
@@ -560,7 +656,7 @@
 
 		<div class="flex justify-end pt-6 text-sm font-normal">
 			<button
-				class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+				class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 				type="submit"
 			>
 				{$i18n.t('Save')}

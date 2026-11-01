@@ -54,6 +54,7 @@ class FolderMetadataResponse(BaseModel):
 
 class FolderNameIdResponse(BaseModel):
     id: str
+    user_id: str
     name: str
     meta: Optional[FolderMetadataResponse] = None
     parent_id: Optional[str] = None
@@ -166,13 +167,14 @@ class FolderTable:
         self, user_id: str, user_group_ids: set[str], db: Optional[AsyncSession] = None
     ) -> dict[str, str]:
         """
-        Returns {folder_id: highest_permission} for all folders shared with user.
+        Returns {folder_id: highest_permission} for folders shared with or by user.
         Checks direct user grants, group grants, and public (user:*) grants.
         """
         from open_webui.models.access_grants import AccessGrant
 
         async with get_async_db_context(db) as db:
             conditions = [
+                AccessGrant.resource_id.in_(select(Folder.id).where(Folder.user_id == user_id)),
                 and_(AccessGrant.principal_type == 'user', AccessGrant.principal_id == '*'),
                 and_(AccessGrant.principal_type == 'user', AccessGrant.principal_id == user_id),
             ]

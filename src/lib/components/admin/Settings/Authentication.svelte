@@ -34,6 +34,7 @@
 		host: '',
 		port: null,
 		attribute_for_mail: 'mail',
+		default_email_domain: '',
 		attribute_for_username: 'uid',
 		app_dn: '',
 		app_dn_password: '',
@@ -92,15 +93,25 @@
 			toast.error(`${error}`);
 			return null;
 		});
+		if (res?.sessions_revoked) {
+			localStorage.removeItem('token');
+			window.location.href = '/auth?state=logout&form=signin';
+			return false;
+		}
+		if (res) {
+			adminConfig = res;
+		}
 		return !!res;
 	};
 
 	const submitHandler = async () => {
-		const adminSaved = await updateAdminHandler();
 		const ldapSaved = await updateLdapServerHandler();
 		const oauthSaved = await updateOAuthHandler();
+		if (!ldapSaved || !oauthSaved) return;
 
-		if (adminSaved && ldapSaved && oauthSaved) {
+		// Save MFA policy last because changing it revokes the current session.
+		const adminSaved = await updateAdminHandler();
+		if (adminSaved) {
 			toast.success($i18n.t('Settings saved successfully!'));
 			await config.set(await getBackendConfig());
 		}
@@ -143,8 +154,10 @@
 				<AdminSettingRow
 					label={$i18n.t('settings.admin.authentication.defaultUserRole.label')}
 					description={$i18n.t('settings.admin.authentication.defaultUserRole.description')}
+					let:labelId
 				>
 					<SettingsSelect
+						id={`${labelId}-control`}
 						bind:value={adminConfig.DEFAULT_USER_ROLE}
 						placeholder={$i18n.t('Select a role')}
 					>
@@ -157,8 +170,10 @@
 				<AdminSettingRow
 					label={$i18n.t('settings.admin.authentication.defaultGroup.label')}
 					description={$i18n.t('settings.admin.authentication.defaultGroup.description')}
+					let:labelId
 				>
 					<SettingsSelect
+						id={`${labelId}-control`}
 						bind:value={adminConfig.DEFAULT_GROUP_ID}
 						placeholder={$i18n.t('Select a group')}
 					>
@@ -250,6 +265,39 @@
 						</a>
 					{/if}
 				</AdminSettingField>
+			</AdminSettingSection>
+
+			<AdminSettingSection title={$i18n.t('Multi-factor authentication')}>
+				<AdminSettingRow let:labelId label={$i18n.t('Require an authenticator for all users')}>
+					<Switch
+						ariaLabelledbyId={labelId}
+						bind:state={adminConfig.ENABLE_MFA}
+						ariaLabel={$i18n.t('Require an authenticator for all users')}
+					/>
+				</AdminSettingRow>
+				<p class="-mt-1 text-[0.6875rem] leading-4 text-gray-400 dark:text-gray-600">
+					{$i18n.t('Changes sign out all devices. Users enroll on their next sign-in.')}
+				</p>
+				{#if adminConfig.ENABLE_MFA}
+					<AdminSettingRow
+						let:labelId
+						label={$i18n.t('Allow OAuth sign-in without an authenticator')}
+						><Switch
+							ariaLabelledbyId={labelId}
+							bind:state={adminConfig.MFA_ALLOW_OAUTH_BYPASS}
+							ariaLabel={$i18n.t('Allow OAuth sign-in without an authenticator')}
+						/></AdminSettingRow
+					>
+					<AdminSettingRow
+						let:labelId
+						label={$i18n.t('Allow trusted-header sign-in without an authenticator')}
+						><Switch
+							ariaLabelledbyId={labelId}
+							bind:state={adminConfig.MFA_ALLOW_TRUSTED_HEADER_BYPASS}
+							ariaLabel={$i18n.t('Allow trusted-header sign-in without an authenticator')}
+						/></AdminSettingRow
+					>
+				{/if}
 			</AdminSettingSection>
 
 			<AdminSettingSection
@@ -432,6 +480,17 @@
 						</Tooltip>
 					</AdminSettingField>
 				</div>
+
+				<AdminSettingField
+					label={$i18n.t('settings.admin.authentication.defaultEmailDomain.label')}
+					description={$i18n.t('settings.admin.authentication.defaultEmailDomain.description')}
+				>
+					<input
+						class={inputClass}
+						placeholder="example.com"
+						bind:value={LDAP_SERVER.default_email_domain}
+					/>
+				</AdminSettingField>
 
 				<AdminSettingField
 					label={$i18n.t('settings.admin.authentication.searchBase.label')}
@@ -878,7 +937,7 @@
 
 	<div class="flex justify-end pt-6 text-sm font-normal">
 		<button
-			class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+			class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 			type="submit"
 		>
 			{$i18n.t('Save')}

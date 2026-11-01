@@ -288,7 +288,7 @@ export const updateExternalKnowledgeSource = async (token: string, id: string, p
 			'Content-Type': 'application/json',
 			authorization: `Bearer ${token}`
 		},
-		body: JSON.stringify(payload)
+		body: JSON.stringify({ ...payload, access_grants: undefined })
 	})
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();
@@ -377,7 +377,8 @@ export const searchKnowledgeBases = async (
 	page: number | null = null,
 	source: string | null = null,
 	orderBy: string | null = null,
-	direction: string | null = null
+	direction: string | null = null,
+	signal?: AbortSignal
 ) => {
 	let error = null;
 
@@ -391,6 +392,7 @@ export const searchKnowledgeBases = async (
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/knowledge/search?${searchParams.toString()}`, {
 		method: 'GET',
+		signal,
 		headers: {
 			Accept: 'application/json',
 			'Content-Type': 'application/json',
@@ -405,6 +407,7 @@ export const searchKnowledgeBases = async (
 			return json;
 		})
 		.catch((err) => {
+			if (signal?.aborted) return null;
 			error = err.detail;
 			console.error(err);
 			return null;
@@ -605,7 +608,6 @@ type KnowledgeUpdateForm = {
 	name?: string;
 	description?: string;
 	data?: object;
-	access_grants?: object[];
 };
 
 export const updateKnowledgeById = async (token: string, id: string, form: KnowledgeUpdateForm) => {
@@ -621,8 +623,7 @@ export const updateKnowledgeById = async (token: string, id: string, form: Knowl
 		body: JSON.stringify({
 			name: form?.name ? form.name : undefined,
 			description: form?.description ? form.description : undefined,
-			data: form?.data ? form.data : undefined,
-			access_grants: form.access_grants
+			data: form?.data ? form.data : undefined
 		})
 	})
 		.then(async (res) => {

@@ -259,6 +259,7 @@
 
 							<Tooltip content={$i18n.t('settings.admin.connections.addConnection.label')}>
 								<button
+									aria-label={$i18n.t('settings.admin.connections.addConnection.label')}
 									class="flex size-6 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-700 dark:text-gray-600 dark:hover:bg-white/5 dark:hover:text-gray-300"
 									on:click={() => {
 										showAddOpenAIConnectionModal = true;
@@ -318,6 +319,7 @@
 
 							<Tooltip content={$i18n.t('settings.admin.connections.addConnection.label')}>
 								<button
+									aria-label={$i18n.t('settings.admin.connections.addConnection.label')}
 									class="flex size-6 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-700 dark:text-gray-600 dark:hover:bg-white/5 dark:hover:text-gray-300"
 									on:click={() => {
 										showAddOllamaConnectionModal = true;
@@ -428,7 +430,7 @@
 
 	<div class="flex justify-end pt-6 text-sm font-normal">
 		<button
-			class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+			class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 			type="submit"
 		>
 			{$i18n.t('Save')}

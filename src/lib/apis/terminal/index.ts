@@ -1,3 +1,36 @@
+import { get } from 'svelte/store';
+import { config } from '$lib/stores';
+import { checkSourceSize, readSourceResponse } from './sourceText';
+// The same attachment is used by @mentions, terminal uploads, and Files-pane requests.
+export type FilesystemFile = {
+	type: 'filesystem';
+	id: string;
+	path: string;
+	url: string;
+	name: string;
+	status: string;
+	size?: number;
+	modified?: number;
+	terminal_id?: string;
+	session_id?: string | null;
+};
+export const filesystemFile = (
+	entry: { path: string; name: string; size?: number; modified?: number },
+	terminalId: string,
+	sessionId: string | null
+): FilesystemFile => ({
+	type: 'filesystem',
+	id: entry.path,
+	path: entry.path,
+	url: entry.path,
+	name: entry.name,
+	size: entry.size,
+	modified: entry.modified,
+	status: 'processed',
+	terminal_id: terminalId,
+	session_id: sessionId
+});
+
 export type FileEntry = {
 	name: string;
 	type: 'file' | 'directory';
@@ -98,7 +131,7 @@ export const resolveTerminalConnection = (
 	directServers: any[],
 	token: string
 ): TerminalConnection | null => {
-	if (!selector) return null;
+	if (!get(config)?.features?.enable_tool_servers || !selector) return null;
 	if (servers.some((server) => server.id === selector)) {
 		return {
 			selector,
@@ -119,6 +152,7 @@ export const terminalRequest = async <T>(
 	path: string,
 	options: RequestInit = {}
 ): Promise<T> => {
+	if (!get(config)?.features?.enable_tool_servers) throw new Error('Tool servers are disabled');
 	const response = await fetch(`${connection.baseUrl}${path}`, {
 		...options,
 		headers: {
@@ -131,9 +165,10 @@ export const terminalRequest = async <T>(
 	return response.json();
 };
 
-const bearerHeaders = (apiKey: string): Record<string, string> => ({
-	Authorization: `Bearer ${apiKey.trim()}`
-});
+const bearerHeaders = (apiKey: string): Record<string, string> => {
+	if (!get(config)?.features?.enable_tool_servers) throw new Error('Tool servers are disabled');
+	return { Authorization: `Bearer ${apiKey.trim()}` };
+};
 
 export const joinTerminalPath = (base: string, child: string) => {
 	if (!child) return base;
@@ -162,6 +197,7 @@ export type TerminalServer = {
 };
 
 export const getTerminalServers = async (token: string): Promise<TerminalServer[]> => {
+	if (!get(config)?.features?.enable_tool_servers) return [];
 	const res = await fetch(`${WEBUI_API_BASE_URL}/terminals/`, {
 		headers: {
 			Authorization: `Bearer ${token}`
@@ -314,6 +350,27 @@ export const getFileMatches = async (
 	return Array.isArray(json?.results) ? json : null;
 };
 
+export const readComparisonSource = async (
+	baseUrl: string,
+	apiKey: string,
+	path: string,
+	signal: AbortSignal,
+	sessionId?: string,
+	size?: number
+): Promise<string> => {
+	checkSourceSize(size);
+	const headers = bearerHeaders(apiKey);
+	if (sessionId) headers['X-Session-Id'] = sessionId;
+	const response = await fetch(
+		`${baseUrl.replace(/\/$/, '')}/files/view?path=${encodeURIComponent(path)}`,
+		{ headers, signal }
+	).catch(() => {
+		signal.throwIfAborted();
+		throw new Error('Could not read file. Check your terminal connection.');
+	});
+	return readSourceResponse(response, signal);
+};
+
 export const readFile = async (
 	baseUrl: string,
 	apiKey: string,
@@ -369,12 +426,13 @@ export const downloadFileBlob = async (
 	baseUrl: string,
 	apiKey: string,
 	path: string,
-	sessionId?: string
+	sessionId?: string,
+	signal?: AbortSignal
 ): Promise<{ blob: Blob; filename: string } | null> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/files/view?path=${encodeURIComponent(path)}`;
 	const headers: Record<string, string> = bearerHeaders(apiKey);
 	if (sessionId) headers['X-Session-Id'] = sessionId;
-	const res = await fetch(url, { headers }).catch(() => null);
+	const res = await fetch(url, { headers, signal }).catch(() => null);
 
 	if (!res || !res.ok) return null;
 
@@ -388,12 +446,13 @@ export const downloadFilePreview = async (
 	baseUrl: string,
 	apiKey: string,
 	path: string,
-	sessionId?: string
+	sessionId?: string,
+	signal?: AbortSignal
 ): Promise<{ blob: Blob; filename: string } | null> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/files/view?path=${encodeURIComponent(path)}&preview=true`;
 	const headers: Record<string, string> = bearerHeaders(apiKey);
 	if (sessionId) headers['X-Session-Id'] = sessionId;
-	const res = await fetch(url, { headers }).catch(() => null);
+	const res = await fetch(url, { headers, signal }).catch(() => null);
 
 	if (!res) return null;
 	if (!res.ok) return null;
@@ -610,11 +669,15 @@ export const moveEntry = async (
 
 export const getListeningPorts = async (
 	baseUrl: string,
-	apiKey: string
+	apiKey: string,
+	sessionId?: string | null
 ): Promise<ListeningPort[]> => {
 	const url = `${baseUrl.replace(/\/$/, '')}/ports`;
 	const res = await fetch(url, {
-		headers: bearerHeaders(apiKey)
+		headers: {
+			...bearerHeaders(apiKey),
+			...(sessionId ? { 'X-Session-Id': sessionId } : {})
+		}
 	}).catch(() => null);
 	if (!res || !res.ok) return [];
 	const json = await res.json().catch(() => null);
@@ -622,6 +685,7 @@ export const getListeningPorts = async (
 };
 
 export const getPortProxyUrl = (baseUrl: string, port: number, path: string = ''): string => {
+	if (!get(config)?.features?.enable_tool_servers) return '';
 	return `${baseUrl.replace(/\/$/, '')}/proxy/${port}/${path}`;
 };
 

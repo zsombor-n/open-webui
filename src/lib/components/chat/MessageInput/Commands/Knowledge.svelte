@@ -6,7 +6,7 @@
 
 	import { tick, getContext, onMount, onDestroy } from 'svelte';
 
-	import { folders } from '$lib/stores';
+	import { folders, user } from '$lib/stores';
 	import { getFolders } from '$lib/apis/folders';
 	import { searchKnowledgeBases, searchKnowledgeFiles } from '$lib/apis/knowledge';
 	import { removeLastWordFromString, isValidHttpUrl, isYoutubeUrl, decodeString } from '$lib/utils';
@@ -18,16 +18,19 @@
 	import Youtube from '$lib/components/icons/Youtube.svelte';
 	import Folder from '$lib/components/icons/Folder.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
 
 	export let query = '';
 	export let onSelect = (e) => {};
+	export let fileUploadEnabled: boolean = true;
 
 	let selectedIdx = 0;
 	let items = [];
 	let searchDebounceTimer: ReturnType<typeof setTimeout>;
 
 	export let filteredItems = [];
+	let webUploadEnabled: boolean = true;
+	$: webUploadEnabled = $user?.role === 'admin' || ($user?.permissions?.chat?.web_upload ?? true);
 	$: filteredItems = [
 		...(query.startsWith('http')
 			? isYoutubeUrl(query)
@@ -41,7 +44,9 @@
 					]
 			: []),
 		...items
-	];
+	].filter((item) =>
+		['youtube', 'web'].includes(item.type) ? webUploadEnabled : fileUploadEnabled
+	);
 
 	$: if (query) {
 		selectedIdx = 0;
@@ -64,7 +69,6 @@
 		}
 	};
 
-	let folderItems = [];
 	let knowledgeItems = [];
 	let fileItems = [];
 
@@ -82,21 +86,18 @@
 	});
 
 	const getItems = () => {
-		getFolderItems();
 		getKnowledgeItems();
 		getKnowledgeFileItems();
 	};
 
-	const getFolderItems = async () => {
-		folderItems = $folders
-			.map((folder) => ({
-				...folder,
-				type: 'folder',
-				description: $i18n.t('Folder'),
-				title: folder.name
-			}))
-			.filter((folder) => folder.name.toLowerCase().includes(query.toLowerCase()));
-	};
+	$: folderItems = $folders
+		.map((folder) => ({
+			...folder,
+			type: 'folder',
+			description: $i18n.t('Folder'),
+			title: folder.name
+		}))
+		.filter((folder) => folder.name.toLowerCase().includes(query.toLowerCase()));
 
 	const getKnowledgeItems = async () => {
 		const res = await searchKnowledgeBases(localStorage.token, query).catch(() => {
@@ -202,7 +203,7 @@
 		{/if}
 	{/each}
 
-	{#if isYoutubeUrl(query)}
+	{#if webUploadEnabled && isYoutubeUrl(query)}
 		<button
 			class="flex h-[1.6875rem] w-full items-center rounded-xl bg-gray-50/40 px-2 text-left text-[0.8125rem] dark:bg-gray-800/40 dark:text-gray-100 selected-command-option-button"
 			type="button"
@@ -230,7 +231,7 @@
 				</div>
 			</div>
 		</button>
-	{:else if query.startsWith('http')}
+	{:else if webUploadEnabled && query.startsWith('http')}
 		<button
 			class="flex h-[1.6875rem] w-full items-center rounded-xl bg-gray-50/40 px-2 text-left text-[0.8125rem] dark:bg-gray-800/40 dark:text-gray-100 selected-command-option-button"
 			type="button"

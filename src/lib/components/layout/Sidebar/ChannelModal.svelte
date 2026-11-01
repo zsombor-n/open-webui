@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { getContext, createEventDispatcher, onMount } from 'svelte';
-	const i18n = getContext('i18n');
+	const i18n = getContext<any>('i18n');
 
 	import { toast } from 'svelte-sonner';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 
-	import { createNewChannel, deleteChannelById } from '$lib/apis/channels';
+	import {
+		createNewChannel,
+		deleteChannelById,
+		updateChannelAccessGrants
+	} from '$lib/apis/channels';
 	import { user } from '$lib/stores';
 
 	import Spinner from '$lib/components/common/Spinner.svelte';
@@ -31,7 +35,7 @@
 	let name = '';
 
 	let isPrivate = null;
-	let accessGrants = [];
+	let accessGrants: any[] = [];
 
 	let groupIds = [];
 	let userIds = [];
@@ -55,6 +59,7 @@
 	};
 
 	const submitHandler = async () => {
+		if (loading) return;
 		loading = true;
 		if (name.length > 128) {
 			toast.error($i18n.t('Channel name must be less than 128 characters'));
@@ -66,7 +71,7 @@
 			type: type,
 			name: name.replace(/\s/g, '-'),
 			is_private: type === 'group' ? (isPrivate ?? true) : null,
-			access_grants: type === '' ? accessGrants : [],
+			...(!edit ? { access_grants: type === '' ? accessGrants : [] } : {}),
 			group_ids: groupIds,
 			user_ids: userIds
 		});
@@ -90,7 +95,7 @@
 			} else {
 				isPrivate = null;
 			}
-			accessGrants = channel?.access_grants ?? [];
+			accessGrants = structuredClone(channel?.access_grants ?? []);
 			userIds = channel?.user_ids ?? [];
 		}
 	};
@@ -134,7 +139,6 @@
 		name = '';
 		accessGrants = [];
 		userIds = [];
-		loading = false;
 	};
 </script>
 
@@ -149,6 +153,7 @@
 				{/if}
 			</div>
 			<button
+				aria-label={$i18n.t('Close')}
 				class="self-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
 				on:click={() => {
 					show = false;
@@ -234,19 +239,36 @@
 					</div>
 
 					{#if type !== 'dm'}
-						<div class="-mx-2 mb-1 mt-2.5 px-2">
+						<div class="-mx-2 mb-1 mt-2.5 px-2" inert={loading} aria-busy={loading}>
 							{#if type === ''}
-								<AccessControl bind:accessGrants accessRoles={['read', 'write']} />
+								<AccessControl
+									bind:accessGrants
+									accessRoles={['read', 'write']}
+									onChange={async (grants) => {
+										if (edit && channel?.id) {
+											const item = channel;
+											loading = true;
+											try {
+												await updateChannelAccessGrants(localStorage.token, item.id, grants);
+												item.access_grants = structuredClone(grants);
+												if (channel === item) accessGrants = item.access_grants;
+												toast.success($i18n.t('Saved'));
+												onUpdate();
+											} catch (error) {
+												if (channel === item)
+													accessGrants = structuredClone(item.access_grants ?? []);
+												toast.error(`${error}`);
+											} finally {
+												loading = false;
+											}
+										}
+									}}
+								/>
 							{:else if type === 'group'}
 								<Visibility
 									state={isPrivate ? 'private' : 'public'}
 									onChange={(value: string) => {
-										if (value === 'private') {
-											isPrivate = true;
-										} else {
-											isPrivate = false;
-										}
-										console.log(value, isPrivate);
+										isPrivate = value === 'private';
 									}}
 								/>
 							{/if}
@@ -278,7 +300,7 @@
 					<div class="flex justify-end pt-3 text-sm font-normal gap-1.5">
 						{#if edit}
 							<button
-								class="px-3.5 py-1.5 text-sm font-normal dark:bg-black dark:hover:bg-black/90 dark:text-white bg-white text-black hover:bg-gray-100 transition rounded-full flex flex-row space-x-1 items-center"
+								class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal transition disabled:opacity-60 dark:bg-black dark:hover:bg-black/90 dark:text-white bg-white text-black hover:bg-gray-100 flex-row"
 								type="button"
 								on:click={() => {
 									showDeleteConfirmDialog = true;
@@ -289,9 +311,7 @@
 						{/if}
 
 						<button
-							class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-950 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex flex-row space-x-1 items-center {loading
-								? ' cursor-not-allowed'
-								: ''}"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white disabled:cursor-not-allowed"
 							type="submit"
 							disabled={loading}
 						>
@@ -302,8 +322,8 @@
 							{/if}
 
 							{#if loading}
-								<div class="ml-2 self-center">
-									<Spinner />
+								<div class="shrink-0">
+									<Spinner className="size-3" />
 								</div>
 							{/if}
 						</button>

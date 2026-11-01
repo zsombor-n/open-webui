@@ -17,6 +17,7 @@ from typing import Any, ClassVar
 from fastapi.encoders import jsonable_encoder
 from open_webui.internal.db import Base, get_async_db
 from sqlalchemy import JSON, BigInteger, Column, Text, delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
@@ -26,10 +27,12 @@ DICT_CONFIG_KEY_ALIASES = {
     'ollama.api_configs': ('OLLAMA_API_CONFIGS',),
     'rag.mineru_params': ('MINERU_PARAMS',),
     'rag.docling_params': ('DOCLING_PARAMS',),
+    'rag.mistral_ocr_params': ('MISTRAL_OCR_PARAMS',),
     'web.search.linkup_search_params': ('LINKUP_SEARCH_PARAMS',),
     'image_generation.automatic1111.api_params': ('AUTOMATIC1111_PARAMS',),
     'image_generation.openai.params': ('IMAGES_OPENAI_API_PARAMS',),
     'audio.tts.openai.params': ('AUDIO_TTS_OPENAI_PARAMS',),
+    'audio.realtime.input_params': ('AUDIO_REALTIME_INPUT_PARAMS',),
     'models.default_metadata': ('DEFAULT_MODEL_METADATA',),
     'models.default_params': ('DEFAULT_MODEL_PARAMS',),
     'task.model.params': ('TASK_MODEL_PARAMS',),
@@ -195,7 +198,7 @@ class Config(Base):
             return values
 
     @staticmethod
-    async def upsert(updates: dict) -> None:
+    async def upsert(updates: dict, *, db: AsyncSession | None = None) -> None:
         """Upsert multiple config key-value pairs. Raises on failure."""
         persistent_updates = {}
         for key, value in updates.items():
@@ -208,16 +211,21 @@ class Config(Base):
         if not persistent_updates:
             return
 
-        async with get_async_db() as db:
-            now = int(time.time())
-            for key, value in persistent_updates.items():
-                existing = await db.get(Config, key)
-                if existing:
-                    existing.value = value
-                    existing.updated_at = now
-                else:
-                    db.add(Config(key=key, value=value, updated_at=now))
-            await db.commit()
+        if db is None:
+            async with get_async_db() as session:
+                await Config.upsert(persistent_updates, db=session)
+                await session.commit()
+            return
+
+        now = int(time.time())
+        for key, value in persistent_updates.items():
+            existing = await db.get(Config, key)
+            if existing:
+                existing.value = value
+                existing.updated_at = now
+            else:
+                db.add(Config(key=key, value=value, updated_at=now))
+        await db.flush()
 
     @staticmethod
     async def delete(key: str) -> bool:

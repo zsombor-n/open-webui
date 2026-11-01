@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -134,7 +135,7 @@ class JSONField(types.TypeDecorator):  # TEXT-backed JSON storage
     cache_ok = True
 
     def process_bind_param(self, value: _T | None, dialect: Dialect) -> Any:
-        return JSONCodec.dumps(value) if value is not None else None
+        return JSONCodec.dumps(value, ensure_ascii=False) if value is not None else None
 
     def process_result_value(self, value: _T | None, dialect: Dialect) -> Any:
         return JSONCodec.loads(value) if value is not None else None
@@ -265,7 +266,7 @@ def _json_codec_kwargs(kwargs: dict) -> dict:
     Unlike ``JSONField``, those serialize through the engine, which otherwise uses
     stdlib ``json``. With ``ENABLE_ORJSON`` off JSONCodec is stdlib ``json`` anyway.
     """
-    kwargs.setdefault('json_serializer', JSONCodec.dumps)
+    kwargs.setdefault('json_serializer', lambda value: JSONCodec.dumps(value, ensure_ascii=False))
     kwargs.setdefault('json_deserializer', JSONCodec.loads)
     return kwargs
 
@@ -348,15 +349,16 @@ elif 'sqlite' in SQLALCHEMY_DATABASE_URL:
             if compiled is False:
                 return False
             if compiled is None:
-                regex = []
+                segments = ['']
                 escaped = False
                 for char in pattern:
                     if escape and not escaped and char == escape:
                         escaped = True
                         continue
-                    regex.append(
-                        '.*' if not escaped and char == '%' else '.' if not escaped and char == '_' else re.escape(char)
-                    )
+                    if not escaped and char == '%':
+                        segments.append('')
+                    else:
+                        segments[-1] += '.' if not escaped and char == '_' else re.escape(char)
                     escaped = False
                 if escaped:
                     compiled = False
@@ -364,7 +366,11 @@ elif 'sqlite' in SQLALCHEMY_DATABASE_URL:
                         compiled_patterns.clear()
                     compiled_patterns[key] = compiled
                     return False
-                compiled = re.compile(''.join(regex), re.DOTALL)
+                # Atomic groups pin each middle segment to its first match, so '%' never backtracks.
+                regex = segments[0] + ''.join(f'(?>.*?{segment})' for segment in segments[1:-1])
+                if len(segments) > 1:
+                    regex += '.*' + segments[-1]
+                compiled = re.compile(regex, re.DOTALL)
                 if len(compiled_patterns) >= 512:
                     compiled_patterns.clear()
                 compiled_patterns[key] = compiled
@@ -471,6 +477,12 @@ if 'sqlite' in ASYNC_SQLALCHEMY_DATABASE_URL:
     @event.listens_for(async_engine.sync_engine, 'connect')
     def _set_sqlite_pragmas(dbapi_connection, connection_record):
         _apply_sqlite_pragmas(dbapi_connection)
+
+    @event.listens_for(async_engine.sync_engine, 'handle_error')
+    def _keep_connection_on_cancel(context):
+        # invalidating here would close the connection inside the cancelled task, and that close is lost
+        if isinstance(context.original_exception, asyncio.CancelledError):
+            context.is_disconnect = False
 else:
     if isinstance(DATABASE_POOL_SIZE, int):
         if DATABASE_POOL_SIZE > 0:
@@ -509,20 +521,14 @@ AsyncSessionLocal = async_sessionmaker(
 async def get_async_session():
     """Async session generator for FastAPI Depends()."""
     async with AsyncSessionLocal() as db:
-        try:
-            yield db
-        finally:
-            await db.close()
+        yield db
 
 
 @asynccontextmanager
 async def get_async_db():
     """Async context manager for use outside of FastAPI dependency injection."""
     async with AsyncSessionLocal() as db:
-        try:
-            yield db
-        finally:
-            await db.close()
+        yield db
 
 
 @asynccontextmanager

@@ -101,6 +101,9 @@
 	on:keyup={(e) => {
 		if (e.key === 'Shift') shiftKey = false;
 	}}
+	on:blur={() => {
+		shiftKey = false;
+	}}
 />
 
 <UserStatusModal
@@ -118,6 +121,7 @@
 			{#if $user}
 				<div>
 					<button
+						role="menuitem"
 						class="flex h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-xs w-full hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition cursor-pointer select-none text-left"
 						type="button"
 						on:click={async () => {
@@ -166,6 +170,7 @@
 				{#if $user?.status_emoji || $user?.status_message}
 					<div class="user-menu-status">
 						<button
+							role="menuitem"
 							class="w-full h-[1.6875rem] gap-2 rounded-xl px-2 hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition cursor-pointer select-none text-xs flex items-center text-left"
 							type="button"
 							on:click={() => {
@@ -189,6 +194,7 @@
 							<div class="self-center">
 								<Tooltip content={$i18n.t('Clear status')}>
 									<button
+										role="menuitem"
 										class="flex size-5 items-center justify-center"
 										type="button"
 										on:click={async (e) => {
@@ -218,6 +224,7 @@
 				{:else}
 					<div class="user-menu-status">
 						<button
+							role="menuitem"
 							class="w-full h-[1.6875rem] gap-2 rounded-xl px-2 hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition cursor-pointer select-none text-xs flex items-center text-left"
 							type="button"
 							on:click={() => {
@@ -243,6 +250,7 @@
 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
 				>
 					<a
+						role="menuitem"
 						href="/workspace"
 						draggable="false"
 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
@@ -264,16 +272,17 @@
 					</a>
 					{#if shiftKey}
 						<Tooltip
-							content={isPinned('workspace')
+							content={pinnedItems.includes('workspace')
 								? $i18n.t('Unpin from Sidebar')
 								: $i18n.t('Pin to Sidebar')}
 						>
 							<button
+								role="menuitem"
 								type="button"
 								class="p-1 mr-1 rounded-lg hover:bg-gray-100/60 dark:hover:bg-gray-700/60 transition"
 								on:click|preventDefault|stopPropagation={() => togglePin('workspace')}
 							>
-								{#if isPinned('workspace')}
+								{#if pinnedItems.includes('workspace')}
 									<PinSlashIcon className="size-3.5" strokeWidth="1.5" />
 								{:else}
 									<PinIcon className="size-3.5" strokeWidth="1.5" />
@@ -289,6 +298,7 @@
 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
 				>
 					<a
+						role="menuitem"
 						href="/notes"
 						draggable="false"
 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
@@ -310,16 +320,17 @@
 					</a>
 					{#if shiftKey}
 						<Tooltip
-							content={isPinned('notes')
+							content={pinnedItems.includes('notes')
 								? $i18n.t('Unpin from Sidebar')
 								: $i18n.t('Pin to Sidebar')}
 						>
 							<button
+								role="menuitem"
 								type="button"
 								class="p-1 mr-1 rounded-lg hover:bg-gray-100/60 dark:hover:bg-gray-700/60 transition"
 								on:click|preventDefault|stopPropagation={() => togglePin('notes')}
 							>
-								{#if isPinned('notes')}
+								{#if pinnedItems.includes('notes')}
 									<PinSlashIcon className="size-3.5" strokeWidth="1.5" />
 								{:else}
 									<PinIcon className="size-3.5" strokeWidth="1.5" />
@@ -335,6 +346,7 @@
 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
 				>
 					<a
+						role="menuitem"
 						href="/calendar"
 						draggable="false"
 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
@@ -356,16 +368,17 @@
 					</a>
 					{#if shiftKey}
 						<Tooltip
-							content={isPinned('calendar')
+							content={pinnedItems.includes('calendar')
 								? $i18n.t('Unpin from Sidebar')
 								: $i18n.t('Pin to Sidebar')}
 						>
 							<button
+								role="menuitem"
 								type="button"
 								class="p-1 mr-1 rounded-lg hover:bg-gray-100/60 dark:hover:bg-gray-700/60 transition"
 								on:click|preventDefault|stopPropagation={() => togglePin('calendar')}
 							>
-								{#if isPinned('calendar')}
+								{#if pinnedItems.includes('calendar')}
 									<PinSlashIcon className="size-3.5" strokeWidth="1.5" />
 								{:else}
 									<PinIcon className="size-3.5" strokeWidth="1.5" />
@@ -381,6 +394,7 @@
 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
 				>
 					<a
+						role="menuitem"
 						href="/automations"
 						draggable="false"
 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
@@ -402,16 +416,17 @@
 					</a>
 					{#if shiftKey}
 						<Tooltip
-							content={isPinned('automations')
+							content={pinnedItems.includes('automations')
 								? $i18n.t('Unpin from Sidebar')
 								: $i18n.t('Pin to Sidebar')}
 						>
 							<button
+								role="menuitem"
 								type="button"
 								class="p-1 mr-1 rounded-lg hover:bg-gray-100/60 dark:hover:bg-gray-700/60 transition"
 								on:click|preventDefault|stopPropagation={() => togglePin('automations')}
 							>
-								{#if isPinned('automations')}
+								{#if pinnedItems.includes('automations')}
 									<PinSlashIcon className="size-3.5" strokeWidth="1.5" />
 								{:else}
 									<PinIcon className="size-3.5" strokeWidth="1.5" />
@@ -427,6 +442,7 @@
 					class="user-menu-row flex items-center w-full rounded-xl hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition-colors"
 				>
 					<a
+						role="menuitem"
 						href="/playground"
 						draggable="false"
 						class="flex flex-1 min-w-0 h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none"
@@ -448,16 +464,17 @@
 					</a>
 					{#if shiftKey}
 						<Tooltip
-							content={isPinned('playground')
+							content={pinnedItems.includes('playground')
 								? $i18n.t('Unpin from Sidebar')
 								: $i18n.t('Pin to Sidebar')}
 						>
 							<button
+								role="menuitem"
 								type="button"
 								class="p-1 mr-1 rounded-lg hover:bg-gray-100/60 dark:hover:bg-gray-700/60 transition"
 								on:click|preventDefault|stopPropagation={() => togglePin('playground')}
 							>
-								{#if isPinned('playground')}
+								{#if pinnedItems.includes('playground')}
 									<PinSlashIcon className="size-3.5" strokeWidth="1.5" />
 								{:else}
 									<PinIcon className="size-3.5" strokeWidth="1.5" />
@@ -475,6 +492,7 @@
 
 				{#if $user?.role === 'admin'}
 					<a
+						role="menuitem"
 						href="https://docs.openwebui.com"
 						target="_blank"
 						draggable="false"
@@ -492,6 +510,7 @@
 
 					<!-- Releases -->
 					<a
+						role="menuitem"
 						href="https://github.com/open-webui/open-webui/releases"
 						target="_blank"
 						draggable="false"
@@ -509,6 +528,7 @@
 				{/if}
 
 				<button
+					role="menuitem"
 					class="flex h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] w-full hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition cursor-pointer select-none"
 					type="button"
 					id="chat-share-button"
@@ -533,6 +553,7 @@
 
 			{#if role === 'admin'}
 				<a
+					role="menuitem"
 					href="/admin"
 					draggable="false"
 					class="flex h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] w-full hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition cursor-pointer select-none"
@@ -557,6 +578,7 @@
 			{/if}
 
 			<button
+				role="menuitem"
 				class="flex h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] w-full hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition cursor-pointer select-none"
 				type="button"
 				on:click={async () => {
@@ -577,6 +599,7 @@
 			</button>
 
 			<button
+				role="menuitem"
 				class="flex h-[1.6875rem] items-center gap-2 rounded-xl px-2 text-[0.8125rem] w-full hover:bg-gray-50/60 dark:hover:bg-gray-800/60 transition cursor-pointer select-none"
 				type="button"
 				on:click={async () => {

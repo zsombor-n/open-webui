@@ -12,6 +12,7 @@
 	import {
 		config,
 		user,
+		models,
 		settings,
 		theme,
 		WEBUI_NAME,
@@ -30,6 +31,7 @@
 		playingNotificationSound,
 		channels,
 		channelId,
+		channelRequestQueues,
 		terminalServers,
 		connectedUserTerminals,
 		showControls,
@@ -39,7 +41,7 @@
 		desktopEvent
 	} from '$lib/stores';
 	import { refreshChatList } from '$lib/stores/chatList';
-	import { getFileContentById } from '$lib/apis/files';
+	import { getFileBlobById, getFileContentById } from '$lib/apis/files';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { beforeNavigate } from '$app/navigation';
@@ -77,10 +79,12 @@
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
 	import SyncStatsModal from '$lib/components/chat/Settings/SyncStatsModal.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import MfaManagement from '$lib/components/auth/MfaManagement.svelte';
 	import { getOutputText } from '$lib/components/chat/Messages/structuredOutput';
 	import { getUserSettings } from '$lib/apis/users';
-	import dayjs from 'dayjs';
-	import { getChannels } from '$lib/apis/channels';
+	import { getChannelById, getChannels } from '$lib/apis/channels';
+	import { shouldNotifyChannelMessage } from '$lib/utils/channelNotifications';
+	import { resolveTerminalConnection, terminalRequest } from '$lib/apis/terminal';
 
 	const unregisterServiceWorkers = async () => {
 		if ('serviceWorker' in navigator) {
@@ -98,13 +102,22 @@
 
 	// handle frontend updates (https://svelte.dev/docs/kit/configuration#version)
 	beforeNavigate(async ({ willUnload, to }) => {
-		if (updated.current && !willUnload && to?.url) {
+		if (updated.current && !mfaManagement && !willUnload && to?.url) {
 			await unregisterServiceWorkers();
 			location.href = to.url.href;
 		}
 	});
 
 	setContext('i18n', i18n);
+	/** @type {import('$lib/components/auth/MfaManagement.svelte').MfaManagementFlow | null} */
+	let mfaManagement = null;
+	setContext(
+		'showMfaManagement',
+		/** @param {import('$lib/components/auth/MfaManagement.svelte').MfaManagementFlow} flow */
+		(flow) => {
+			mfaManagement = flow;
+		}
+	);
 
 	const bc = new BroadcastChannel('active-tab-channel');
 
@@ -171,7 +184,7 @@
 			randomizationFactor: 0.5,
 			path: '/ws/socket.io',
 			transports: enableWebsocket ? ['websocket'] : ['polling', 'websocket'],
-			auth: { token: localStorage.token }
+			auth: (cb) => cb({ token: localStorage.token })
 		});
 		await socket.set(_socket);
 
@@ -205,8 +218,9 @@
 
 			if (version !== null || deploymentId !== null) {
 				if (
-					($WEBUI_VERSION !== null && version !== $WEBUI_VERSION) ||
-					($WEBUI_DEPLOYMENT_ID !== null && deploymentId !== $WEBUI_DEPLOYMENT_ID)
+					!mfaManagement &&
+					(($WEBUI_VERSION !== null && version !== $WEBUI_VERSION) ||
+						($WEBUI_DEPLOYMENT_ID !== null && deploymentId !== $WEBUI_DEPLOYMENT_ID))
 				) {
 					await unregisterServiceWorkers();
 					location.href = location.href;
@@ -313,7 +327,9 @@
 			/\bimport\s+tiktoken\b|\bfrom\s+tiktoken\b/.test(code) ? 'tiktoken' : null,
 			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null,
 			/\bimport\s+openpyxl\b|\bfrom\s+openpyxl\b/.test(code) ? 'openpyxl' : null,
-			/\.(read|to)_excel\(|\.Excel(Writer|File)\(/.test(code) ? 'openpyxl' : null
+			/\.(read|to)_excel\(|\.Excel(Writer|File)\(/.test(code) ? 'openpyxl' : null,
+			/\bimport\s+pptx\b|\bfrom\s+pptx\b/.test(code) ? 'python-pptx' : null,
+			/\bimport\s+docx\b|\bfrom\s+docx\b/.test(code) ? 'python-docx' : null
 		].filter(Boolean);
 
 		const worker = getOrCreateWorker();
@@ -498,6 +514,10 @@
 	};
 
 	const executeTool = async (data, cb, chatId) => {
+		if (!$config?.features?.enable_tool_servers) {
+			cb?.({ error: 'Tool servers are disabled' });
+			return;
+		}
 		const { toolServer, toolServerData, token } = resolveToolServer(data.server?.url);
 		const defaultInline =
 			data?.name === 'display_file' &&
@@ -534,7 +554,7 @@
 						: terminalFileResult(result, params, toolServer.url, chatId)
 					: res;
 
-			if (data?.name === 'display_file' && params?.path && !inlineDisplayFile) {
+			if (data?.name === 'display_file' && params?.path && !inlineDisplayFile && !chatId) {
 				if (result?.exists !== false) {
 					displayFileHandler(
 						result?.path ?? params.path,
@@ -559,16 +579,19 @@
 	};
 
 	const chatEventHandler = async (event, cb) => {
+		if (event.shared) return;
 		// Answer this session's availability check even when another chat is active.
 		if (
 			event?.data?.type === 'request:terminal:state' &&
 			event.data.data?.session_id === $socket?.id
 		) {
 			cb?.({
-				connected: [...$connectedUserTerminals.values()].some(
-					(shell) =>
-						shell.terminalId === event.data.data?.terminal_id && shell.chatId === event.chat_id
-				)
+				connected:
+					$config?.features?.enable_tool_servers &&
+					[...$connectedUserTerminals.values()].some(
+						(shell) =>
+							shell.terminalId === event.data.data?.terminal_id && shell.chatId === event.chat_id
+					)
 			});
 			return;
 		}
@@ -642,6 +665,29 @@
 			} else if (type === 'execute:tool') {
 				console.log('execute:tool', data);
 				executeTool(data, cb, event.chat_id);
+				return;
+			} else if (type === 'request:terminal') {
+				try {
+					if (!$config?.features?.enable_tool_servers) throw new Error('Tool servers are disabled');
+					const connection = resolveTerminalConnection(
+						data.terminal_id,
+						[],
+						$config?.features?.enable_direct_integrations ? ($settings?.terminalServers ?? []) : [],
+						localStorage.token
+					);
+					if (!connection) throw new Error('Terminal Not Found');
+					let options = {};
+					if (data.file) {
+						const blob = await getFileBlobById(localStorage.token, data.file.id);
+						const body = new FormData();
+						body.append('file', blob, data.file.name);
+						options = { method: 'POST', body };
+					}
+					const result = await terminalRequest(connection, event.chat_id, data.path, options);
+					cb?.({ data: result });
+				} catch (error) {
+					cb?.({ error: `${error}` });
+				}
 				return;
 			} else if (type === 'request:chat:completion') {
 				console.log(data, $socket.id);
@@ -789,6 +835,16 @@
 
 	const channelEventHandler = async (event) => {
 		console.log('channelEventHandler', event);
+		if (event.data?.type === 'channel:mute') {
+			channels.update((items) =>
+				items.map((item) =>
+					item.id === event.channel_id
+						? { ...item, is_channel_muted: event.data.data.is_channel_muted }
+						: item
+				)
+			);
+			return;
+		}
 		if (event.data?.type === 'typing') {
 			return;
 		}
@@ -863,7 +919,24 @@
 			}
 
 			if (type === 'message') {
+				const preference =
+					$channels?.find((item) => item.id === event.channel_id) ??
+					(await getChannelById(localStorage.token, event.channel_id).catch(() => null));
+				if (
+					!preference ||
+					!shouldNotifyChannelMessage(
+						preference.is_channel_muted ?? false,
+						data?.content ?? '',
+						$user?.id ?? ''
+					)
+				) {
+					return;
+				}
 				const title = `${data?.user?.name}${event?.channel?.type !== 'dm' ? ` (#${event?.channel?.name})` : ''}`;
+				const content = data?.content?.replace(
+					/<([@#])([^|>\s]+)(?:\|([^>]*))?>/g,
+					(_, trigger, id, label) => trigger + (label || id)
+				);
 
 				if ($isLastActiveTab) {
 					if ($settings?.notificationEnabled ?? false) {
@@ -871,7 +944,7 @@
 						// Do not alter, remove, obscure, or replace it except as LICENSE permits:
 						// https://docs.openwebui.com/license.
 						new Notification(`${title} / Open WebUI`, {
-							body: data?.content,
+							body: content,
 							icon: `${WEBUI_API_BASE_URL}/users/${data?.user?.id}/profile/image`
 						});
 					}
@@ -884,7 +957,7 @@
 								`/channels/${event.channel_id}${data?.parent_id ? `?thread=${data.parent_id}` : ''}`
 							);
 						},
-						content: data?.content,
+						content,
 						title: `${title}`
 					},
 					duration: 15000,
@@ -1216,7 +1289,12 @@
 		};
 		window.addEventListener('resize', onResize);
 
-		user.subscribe(async (value) => {
+		let queueUserId = $user?.id;
+		const unsubscribeQueueUser = user.subscribe(async (value) => {
+			if (queueUserId !== value?.id) {
+				channelRequestQueues.set({});
+				queueUserId = value?.id;
+			}
 			if (value) {
 				$socket?.off('events', chatEventHandler);
 				$socket?.off('events:channel', channelEventHandler);
@@ -1235,6 +1313,15 @@
 			}
 		});
 
+		/** @param {BeforeUnloadEvent} event */
+		const beforeUnloadHandler = (event) => {
+			if (Object.values($channelRequestQueues).some((queue) => queue.length)) {
+				event.preventDefault();
+				event.returnValue = '';
+			}
+		};
+		window.addEventListener('beforeunload', beforeUnloadHandler);
+
 		let backendConfig = null;
 		try {
 			backendConfig = await getBackendConfig();
@@ -1251,7 +1338,7 @@
 		// Initialize i18n even if we didn't get a backend config,
 		// so `/error` can show something that's not `undefined`.
 
-		await initI18n(localStorage?.locale, backendConfig?.i18n ?? {});
+		await initI18n(backendConfig?.default_locale, backendConfig?.i18n ?? {});
 		if (!localStorage.locale) {
 			const languages = await getLanguages();
 			const browserLanguages = navigator.languages
@@ -1261,7 +1348,6 @@
 				? backendConfig.default_locale
 				: bestMatchingLanguage(languages, browserLanguages, 'en-US');
 			await changeLanguage(lang);
-			dayjs.locale(lang);
 		}
 
 		if (backendConfig) {
@@ -1367,6 +1453,8 @@
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('pagehide', handlePageHidden);
 			window.removeEventListener('pageshow', handlePageVisible);
+			window.removeEventListener('beforeunload', beforeUnloadHandler);
+			unsubscribeQueueUser();
 		};
 	});
 
@@ -1375,6 +1463,14 @@
 			'high-contrast',
 			$settings?.highContrastMode ?? false
 		);
+
+		const viewport = document.querySelector('meta[name="viewport"]');
+		if (viewport) {
+			viewport.content = viewport.content.replace(
+				/maximum-scale=[\d.]+/,
+				`maximum-scale=${$settings?.highContrastMode ? 5 : 1}`
+			);
+		}
 	}
 
 	onDestroy(() => {
@@ -1415,7 +1511,9 @@
 {/if}
 
 {#if loaded}
-	{#if $isApp}
+	{#if mfaManagement}
+		<MfaManagement flow={mfaManagement} onClose={() => (mfaManagement = null)} />
+	{:else if $isApp}
 		<div class="flex flex-row h-screen">
 			<AppSidebar />
 
@@ -1432,21 +1530,23 @@
 	<SyncStatsModal bind:show={showSyncStatsModal} eventData={syncStatsEventData} />
 {/if}
 
-<Toaster
-	theme={$theme.includes('dark')
-		? 'dark'
-		: $theme === 'system'
-			? window.matchMedia('(prefers-color-scheme: dark)').matches
-				? 'dark'
-				: 'light'
-			: 'light'}
-	richColors
-	position="top-right"
-	closeButton
-	toastOptions={{
-		classes: {
-			closeButton:
-				'!bg-white/80 !text-gray-500 !border-gray-200 hover:!bg-gray-50 hover:!text-gray-700 dark:!bg-gray-850 dark:!text-gray-400 dark:!border-gray-700 dark:hover:!bg-gray-800 dark:hover:!text-gray-200'
-		}
-	}}
-/>
+<div aria-live="polite">
+	<Toaster
+		theme={$theme.includes('dark')
+			? 'dark'
+			: $theme === 'system'
+				? window.matchMedia('(prefers-color-scheme: dark)').matches
+					? 'dark'
+					: 'light'
+				: 'light'}
+		richColors
+		position="top-right"
+		closeButton
+		toastOptions={{
+			classes: {
+				closeButton:
+					'!bg-white/80 !text-gray-500 !border-gray-200 hover:!bg-gray-50 hover:!text-gray-700 dark:!bg-gray-850 dark:!text-gray-400 dark:!border-gray-700 dark:hover:!bg-gray-800 dark:hover:!text-gray-200'
+			}
+		}}
+	/>
+</div>

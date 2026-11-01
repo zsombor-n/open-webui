@@ -6,14 +6,16 @@
 	import { page } from '$app/stores';
 	import { fade } from 'svelte/transition';
 
-	import { getModels, getToolServersData, getVersionUpdates } from '$lib/apis';
+	import { getBackendConfig, getModels, getToolServersData, getVersionUpdates } from '$lib/apis';
 	import { getTools } from '$lib/apis/tools';
+	import { getSkills } from '$lib/apis/skills';
+	import { getSessionUser } from '$lib/apis/auths';
 	import { getBanners } from '$lib/apis/configs';
 	import { getTerminalServers } from '$lib/apis/terminal';
 	import { getUserSettings } from '$lib/apis/users';
 	import { setAppFontFamily, setTextScale } from '$lib/utils/text-scale';
 
-	import { WEBUI_VERSION, WEBUI_API_BASE_URL } from '$lib/constants';
+	import { WEBUI_VERSION, WEBUI_API_BASE_URL, WEBUI_BUILD_CHANNEL } from '$lib/constants';
 	import { compareVersion } from '$lib/utils';
 
 	import {
@@ -23,6 +25,8 @@
 		models,
 		knowledge,
 		tools,
+		skills,
+		socket,
 		functions,
 		tags,
 		banners,
@@ -47,6 +51,7 @@
 	import UpdateInfoToast from '$lib/components/layout/UpdateInfoToast.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { loadKeybindings, matchKeybinding, Shortcut } from '$lib/shortcuts';
+	import { canUseTemporaryChats } from '$lib/utils/settings-access';
 
 	const i18n = getContext('i18n');
 
@@ -90,7 +95,14 @@
 	};
 
 	const setToolServers = async () => {
-		let toolServersData = await getToolServersData($settings?.toolServers ?? []);
+		if (!$config?.features?.enable_tool_servers) {
+			toolServers.set([]);
+			terminalServers.set([]);
+			return;
+		}
+		let toolServersData = await getToolServersData(
+			$config?.features?.enable_direct_integrations ? ($settings?.toolServers ?? []) : []
+		);
 		toolServersData = toolServersData.filter((data) => {
 			if (!data || data.error) {
 				toast.error(
@@ -105,9 +117,11 @@
 		toolServers.set(toolServersData);
 
 		// Inject enabled terminal servers as always-on tool servers
-		const enabledTerminals = (($settings as any)?.terminalServers ?? []).filter(
-			(s: any) => s.enabled || s.url === $selectedTerminalId
-		);
+		const enabledTerminals = (
+			$config?.features?.enable_direct_integrations
+				? (($settings as any)?.terminalServers ?? [])
+				: []
+		).filter((s: any) => s.enabled || s.url === $selectedTerminalId);
 
 		// Fetch terminal servers the user has access to (for FileNav + terminal_id)
 		const systemTerminals = await getTerminalServers(localStorage.token);
@@ -162,6 +176,38 @@
 		const toolsData = await getTools(localStorage.token);
 		tools.set(toolsData);
 	};
+
+	const refreshAccess = async () => {
+		if (!localStorage.token) return;
+		try {
+			user.set(await getSessionUser(localStorage.token));
+			const results = await Promise.allSettled([
+				getBackendConfig().then((value) => config.set(value)),
+				setModels(),
+				setTools(),
+				setToolServers(),
+				getSkills(localStorage.token).then((value) => skills.set(value))
+			]);
+			for (const result of results) {
+				if (result.status === 'rejected') console.error('Unable to refresh access', result.reason);
+			}
+		} catch (error) {
+			console.error('Unable to refresh permissions', error);
+		}
+	};
+
+	onMount(() => {
+		const socketInstance = $socket;
+		const scheduleAccessRefresh = () => {
+			socketInstance?.off('connect', refreshAccess);
+			socketInstance?.once('connect', refreshAccess);
+		};
+		socketInstance?.on('access:updated', scheduleAccessRefresh);
+		return () => {
+			socketInstance?.off('access:updated', scheduleAccessRefresh);
+			socketInstance?.off('connect', refreshAccess);
+		};
+	});
 
 	const openSettingsFromUrl = async () => {
 		const requestedSettings = $page.url.searchParams.get('settings');
@@ -234,18 +280,14 @@
 			return;
 		}
 
-		selectedTerminalId.set(localStorage.selectedTerminalId ?? null);
+		selectedTerminalId.set(
+			$config?.features?.enable_tool_servers ? (localStorage.selectedTerminalId ?? null) : null
+		);
 
-		const loadToolServers = setToolServers().catch((e) => {
+		setToolServers().catch((e) => {
 			console.error('Failed to load tool servers:', e);
 			terminalServers.set([]);
 		});
-		if (
-			$page.url.searchParams.get('q') &&
-			($page.url.searchParams.get('submit') ?? 'true') === 'true'
-		) {
-			await loadToolServers;
-		}
 
 		const setupKeyboardShortcuts = () => {
 			document.addEventListener('keydown', async (event) => {
@@ -309,6 +351,9 @@
 				} else if (shortcut === Shortcut.NEW_TEMPORARY_CHAT) {
 					console.log('Shortcut triggered: NEW_TEMPORARY_CHAT');
 					event.preventDefault();
+					if (!canUseTemporaryChats({ user: $user, config: null })) {
+						return;
+					}
 					if ($user?.role !== 'admin' && $user?.permissions?.chat?.temporary_enforced) {
 						temporaryChatEnabled.set(true);
 					} else {
@@ -367,7 +412,11 @@
 		}
 
 		// Check for version updates
-		if ($user?.role === 'admin' && $config?.features?.enable_version_update_check) {
+		if (
+			WEBUI_BUILD_CHANNEL === 'main' &&
+			$user?.role === 'admin' &&
+			$config?.features?.enable_version_update_check
+		) {
 			// Check if the user has dismissed the update toast in the last 24 hours
 			if (localStorage.dismissedUpdateToast) {
 				const dismissedUpdateToast = new Date(Number(localStorage.dismissedUpdateToast));
@@ -389,6 +438,7 @@
 
 		// Persist selectedTerminalId across page loads
 		selectedTerminalId.subscribe((value) => {
+			if (!$config?.features?.enable_tool_servers) return;
 			if (value === null) {
 				delete localStorage.selectedTerminalId;
 			} else {
@@ -425,7 +475,7 @@
 <SettingsModal bind:show={$showSettings} />
 <ChangelogModal bind:show={$showChangelog} />
 
-{#if version && compareVersion(version.latest, version.current) && ($settings?.showUpdateToast ?? true)}
+{#if WEBUI_BUILD_CHANNEL === 'main' && version && compareVersion(version.latest, version.current) && ($settings?.showUpdateToast ?? true)}
 	<div class=" absolute bottom-8 right-8 z-50" in:fade={{ duration: 100 }}>
 		<UpdateInfoToast
 			{version}
@@ -448,7 +498,8 @@
 				<Sidebar />
 
 				{#if loaded}
-					<main id="main-content" class="contents">
+					<main class="contents">
+						<div id="main-content" tabindex="-1" class="sr-only left-0 top-0"></div>
 						<slot />
 					</main>
 				{:else}

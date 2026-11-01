@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatSchedule } from '$lib/utils/schedule';
 	import { onMount, onDestroy, getContext } from 'svelte';
 
 	import dayjs from '$lib/dayjs';
@@ -100,6 +101,8 @@
 			}
 		});
 	};
+
+	$: if (loaded && $i18n) syncHeader();
 
 	const handleSearchInput = () => {
 		if (!loaded) return;
@@ -225,7 +228,9 @@
 
 	const formatLastRun = (automation: AutomationResponse): string => {
 		return automation.last_run_at
-			? dayjs(automation.last_run_at / 1000000).fromNow()
+			? dayjs(automation.last_run_at / 1000000)
+					.locale($i18n.language)
+					.fromNow()
 			: $i18n.t('Never');
 	};
 
@@ -307,55 +312,6 @@
 		await getAutomationList();
 	};
 
-	const formatRRule = (rrule: string): string => {
-		const match = rrule.match(/DTSTART[^:]*:(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/i);
-		// Detect one-time schedule (ONCE)
-		if (/COUNT=1(?!\d)/.test(rrule)) {
-			if (match) {
-				const d = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}`);
-				return `Once · ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
-			}
-			return 'Once';
-		}
-		const parts: Record<string, string> = {};
-		rrule
-			.split(/\s+/)
-			.filter((line) => !line.toUpperCase().startsWith('DTSTART'))
-			.join('')
-			.replace('RRULE:', '')
-			.split(';')
-			.forEach((p) => {
-				const [k, v] = p.split('=');
-				if (k && v) parts[k] = v;
-			});
-		const freq = parts.FREQ || '';
-		const hour = parseInt(parts.BYHOUR || match?.[4] || '0');
-		const min = (parts.BYMINUTE || match?.[5] || '0').padStart(2, '0');
-		const iv = parseInt(parts.INTERVAL || '1');
-		const ampm = hour >= 12 ? 'PM' : 'AM';
-		const h12 = hour % 12 || 12;
-		const time = `${h12}:${min} ${ampm}`;
-
-		if (freq === 'MINUTELY') return iv === 1 ? 'Every minute' : `Every ${iv} minutes`;
-		if (freq === 'HOURLY') return iv === 1 ? 'Hourly' : `Every ${iv} hours`;
-		if (freq === 'DAILY') return `Daily at ${time}`;
-		if (freq === 'WEEKLY') {
-			const days = parts.BYDAY || '';
-			return days ? `${days} at ${time}` : `Weekly at ${time}`;
-		}
-		if (freq === 'MONTHLY')
-			return `Monthly on the ${parts.BYMONTHDAY || '1'}${ordinal(parts.BYMONTHDAY || '1')} at ${time}`;
-		return rrule;
-	};
-
-	const ordinal = (n: string): string => {
-		const num = parseInt(n);
-		if (num % 10 === 1 && num !== 11) return 'st';
-		if (num % 10 === 2 && num !== 12) return 'nd';
-		if (num % 10 === 3 && num !== 13) return 'rd';
-		return 'th';
-	};
-
 	onMount(() => {
 		if (
 			!($config?.features as any)?.enable_automations ||
@@ -366,7 +322,6 @@
 		}
 
 		loaded = true;
-		syncHeader();
 		ensureChannels();
 
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -544,7 +499,7 @@
 							</Tooltip>
 
 							<div slot="content">
-								<DropdownMenu className="w-[10.625rem] shadow-sm">
+								<DropdownMenu className="min-w-[10.625rem] shadow-sm">
 									<button
 										class="select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem]"
 										type="button"
@@ -587,20 +542,14 @@
 				</div>
 			{:else}
 				<div class="gap-y-0.5 grid my-1">
+					<!-- Preserve the former row label for i18n extraction: $i18n.t('Open automation') -->
 					{#each automations as automation (automation.id)}
 						<div
-							role="button"
-							tabindex="0"
-							aria-label={$i18n.t('Open automation')}
+							role="presentation"
 							class="group flex min-h-8 w-full cursor-pointer items-center gap-2 overflow-hidden rounded-xl px-2 py-1 text-left"
-							on:click={() => {
+							on:click={(e) => {
+								if (e.target instanceof Element && e.target.closest('a')) return;
 								goto(`/automations/${automation.id}`);
-							}}
-							on:keydown={(e) => {
-								if (e.key === 'Enter' || e.key === ' ') {
-									e.preventDefault();
-									goto(`/automations/${automation.id}`);
-								}
 							}}
 						>
 							<div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
@@ -608,16 +557,18 @@
 									<div class="flex min-w-0 items-center gap-2 overflow-hidden">
 										<div class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
 											<Tooltip content={automation.name} className="min-w-0" placement="top-start">
-												<div
-													class="truncate text-[0.8125rem] leading-5 text-gray-800 group-hover:underline dark:text-gray-200"
+												<a
+													href={`/automations/${automation.id}`}
+													class="focus-ring block truncate rounded text-[0.8125rem] leading-5 text-gray-800 group-hover:underline focus-visible:underline dark:text-gray-200"
+													>{automation.name}</a
 												>
-													{automation.name}
-												</div>
 											</Tooltip>
 
 											<Tooltip
 												content={automation.last_run_at
-													? dayjs(automation.last_run_at / 1000000).format('LLLL')
+													? dayjs(automation.last_run_at / 1000000)
+															.locale($i18n.language)
+															.format('LLLL')
 													: $i18n.t('Never')}
 											>
 												<div
@@ -635,11 +586,11 @@
 								class="hidden max-w-56 shrink-0 self-center truncate text-right text-[0.6875rem] leading-5 text-gray-500 dark:text-gray-500 md:block"
 							>
 								<Tooltip
-									content={`${formatRRule(automation.data.rrule)} · ${formatDestination(automation)}`}
+									content={`${formatSchedule(automation.data.rrule, $i18n)} · ${formatDestination(automation)}`}
 									className="min-w-0"
 								>
 									<div class="truncate">
-										{formatRRule(automation.data.rrule)} · {formatDestination(automation)}
+										{formatSchedule(automation.data.rrule, $i18n)} · {formatDestination(automation)}
 									</div>
 								</Tooltip>
 							</div>
@@ -696,9 +647,9 @@
 											</button>
 										</AutomationMenu>
 
-										<button
+										<div
 											class="flex h-6 items-center"
-											type="button"
+											role="presentation"
 											on:click={(e) => {
 												e.stopPropagation();
 												e.preventDefault();
@@ -709,12 +660,13 @@
 											>
 												<Switch
 													bind:state={automation.is_active}
+													ariaLabel={$i18n.t('Enabled')}
 													on:change={() => {
 														toggleHandler(automation);
 													}}
 												/>
 											</Tooltip>
-										</button>
+										</div>
 									</div>
 								{/if}
 							</div>

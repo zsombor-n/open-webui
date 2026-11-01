@@ -276,8 +276,10 @@
 					<AdminSettingField
 						label={$i18n.t('settings.admin.pipelines.pipelineUrl.label')}
 						description={$i18n.t('settings.admin.pipelines.pipelineUrl.description')}
+						forId="pipelines-url"
 					>
 						<SettingsSelect
+							id="pipelines-url"
 							bind:value={selectedPipelinesUrlIdx}
 							className="w-full"
 							placeholder={$i18n.t('Select a pipeline url')}
@@ -364,9 +366,11 @@
 							<AdminSettingField
 								label={$i18n.t('settings.admin.pipelines.pipeline.label')}
 								description={$i18n.t('settings.admin.pipelines.pipeline.description')}
+								forId="pipeline"
 							>
 								<div class="flex gap-2">
 									<SettingsSelect
+										id="pipeline"
 										bind:value={selectedPipelineIdx}
 										className="w-full"
 										placeholder={$i18n.t('Select a pipeline')}
@@ -401,10 +405,12 @@
 									{#each Object.keys(valves_spec.properties) as property}
 										<div>
 											<AdminSettingRow
+												let:labelId
 												label={valves_spec.properties[property].title}
 												description={valves_spec.properties[property]?.description ?? ''}
 											>
 												<button
+													id={`${labelId}-control`}
 													class={actionButtonClass}
 													type="button"
 													on:click={() => {
@@ -490,7 +496,7 @@
 	{#if PIPELINES_LIST !== null && PIPELINES_LIST.length > 0}
 		<div class="flex justify-end pt-6 text-sm font-normal">
 			<button
-				class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+				class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 				type="submit"
 			>
 				{$i18n.t('Save')}

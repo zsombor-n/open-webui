@@ -16,7 +16,7 @@
 		if ($user?.role !== 'admin') {
 			await goto('/', { replaceState: true });
 		} else if (
-			!$config?.features?.enable_plugins &&
+			!$config?.features?.enable_functions &&
 			$page.url.pathname.includes('/admin/functions')
 		) {
 			await goto('/admin', { replaceState: true });
@@ -66,7 +66,7 @@
 
 				<div class="flex w-full items-center">
 					<div
-						class="flex min-w-0 mr-1.5 items-center gap-0.5 md:gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-normal rounded-full bg-transparent py-1 touch-auto pointer-events-auto"
+						class="flex min-w-0 mr-1.5 items-center gap-0.5 md:gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-normal bg-transparent py-1 touch-auto pointer-events-auto"
 					>
 						<a
 							draggable="false"
@@ -84,7 +84,7 @@
 							href="/admin/evaluations">{$i18n.t('Evaluations')}</a
 						>
 
-						{#if $config?.features?.enable_plugins}
+						{#if $config?.features?.enable_functions}
 							<a
 								draggable="false"
 								class="min-w-fit px-1 text-sm {$page.url.pathname.includes('/admin/functions')

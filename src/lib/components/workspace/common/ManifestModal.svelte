@@ -18,6 +18,7 @@
 		<div class=" flex justify-between dark:text-gray-300 px-4 pt-3 pb-1">
 			<div class=" text-sm font-medium self-center">{$i18n.t('Show your support!')}</div>
 			<button
+				aria-label={$i18n.t('Close')}
 				class="self-center rounded-lg p-1 text-gray-500 transition hover:bg-gray-50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
 				on:click={() => {
 					show = false;
@@ -64,7 +65,7 @@
 
 					<div class="flex justify-end pt-3 text-sm font-normal">
 						<button
-							class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+							class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 							type="submit"
 						>
 							{$i18n.t('Done')}

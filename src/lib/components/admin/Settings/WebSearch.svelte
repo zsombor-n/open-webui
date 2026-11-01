@@ -50,7 +50,14 @@
 		'linkup',
 		'openserp'
 	];
-	let webLoaderEngines = ['playwright', 'firecrawl', 'tavily', 'microsoft_web_iq', 'external'];
+	let webLoaderEngines = [
+		'playwright',
+		'firecrawl',
+		'tavily',
+		'exa',
+		'microsoft_web_iq',
+		'external'
+	];
 
 	let webConfig: any = null;
 	const inputClass =
@@ -179,55 +186,59 @@
 					<Switch bind:state={webConfig.ENABLE_WEB_SEARCH} ariaLabelledbyId={labelId} />
 				</AdminSettingRow>
 
-				<AdminSettingRow
-					label={$i18n.t('settings.admin.web.webSearchConfirmation.label')}
-					description={$i18n.t('settings.admin.web.webSearchConfirmation.description')}
-					let:labelId
-				>
-					<Switch
-						bind:state={webConfig.ENABLE_WEB_SEARCH_CONFIRMATION}
-						ariaLabelledbyId={labelId}
-					/>
-				</AdminSettingRow>
-
-				{#if webConfig.ENABLE_WEB_SEARCH_CONFIRMATION}
-					<AdminSettingField
-						label={$i18n.t('settings.admin.web.webSearchConfirmationContent.label')}
-						description={$i18n.t('settings.admin.web.webSearchConfirmationContent.description')}
+				{#if webConfig.ENABLE_WEB_SEARCH}
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.web.webSearchConfirmation.label')}
+						description={$i18n.t('settings.admin.web.webSearchConfirmation.description')}
+						let:labelId
 					>
-						<Textarea
-							className={textareaClass}
-							placeholder={$i18n.t(
-								'Your query will be sent to the configured web search provider.'
-							)}
-							bind:value={webConfig.WEB_SEARCH_CONFIRMATION_CONTENT}
+						<Switch
+							bind:state={webConfig.ENABLE_WEB_SEARCH_CONFIRMATION}
+							ariaLabelledbyId={labelId}
 						/>
-					</AdminSettingField>
+					</AdminSettingRow>
+
+					{#if webConfig.ENABLE_WEB_SEARCH_CONFIRMATION}
+						<AdminSettingField
+							label={$i18n.t('settings.admin.web.webSearchConfirmationContent.label')}
+							description={$i18n.t('settings.admin.web.webSearchConfirmationContent.description')}
+						>
+							<Textarea
+								className={textareaClass}
+								placeholder={$i18n.t(
+									'Your query will be sent to the configured web search provider.'
+								)}
+								bind:value={webConfig.WEB_SEARCH_CONFIRMATION_CONTENT}
+							/>
+						</AdminSettingField>
+					{/if}
+
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.web.webSearchEngine.label')}
+						description={$i18n.t('settings.admin.web.webSearchEngine.description')}
+						let:labelId
+					>
+						<SettingsSelect
+							id={`${labelId}-control`}
+							bind:value={webConfig.WEB_SEARCH_ENGINE}
+							placeholder={$i18n.t('Select a engine')}
+							required
+						>
+							<option disabled selected value="">{$i18n.t('Select a engine')}</option>
+							{#each webSearchEngines as engine}
+								{#if engine === 'duckduckgo' || engine === 'ddgs'}
+									<option value={engine} disabled={$config?.features?.slim}>DDGS</option>
+								{:else if engine === 'serphouse'}
+									<option value={engine}>SERPHouse</option>
+								{:else}
+									<option value={engine}>{engine}</option>
+								{/if}
+							{/each}
+						</SettingsSelect>
+					</AdminSettingRow>
 				{/if}
 
-				<AdminSettingRow
-					label={$i18n.t('settings.admin.web.webSearchEngine.label')}
-					description={$i18n.t('settings.admin.web.webSearchEngine.description')}
-				>
-					<SettingsSelect
-						bind:value={webConfig.WEB_SEARCH_ENGINE}
-						placeholder={$i18n.t('Select a engine')}
-						required
-					>
-						<option disabled selected value="">{$i18n.t('Select a engine')}</option>
-						{#each webSearchEngines as engine}
-							{#if engine === 'duckduckgo' || engine === 'ddgs'}
-								<option value={engine} disabled={$config?.features?.slim}>DDGS</option>
-							{:else if engine === 'serphouse'}
-								<option value={engine}>SERPHouse</option>
-							{:else}
-								<option value={engine}>{engine}</option>
-							{/if}
-						{/each}
-					</SettingsSelect>
-				</AdminSettingRow>
-
-				{#if webConfig.WEB_SEARCH_ENGINE !== ''}
+				{#if webConfig.ENABLE_WEB_SEARCH && webConfig.WEB_SEARCH_ENGINE !== ''}
 					{#if webConfig.WEB_SEARCH_ENGINE === 'ollama_cloud'}
 						<div class="mb-2.5 flex w-full flex-col">
 							<div>
@@ -577,6 +588,20 @@
 									placeholder={$i18n.t('Enter Tavily API Key')}
 									bind:value={webConfig.TAVILY_API_KEY}
 								/>
+							</div>
+						</div>
+
+						<div class="mb-2.5 flex w-full flex-col">
+							<div>
+								<div class=" self-center text-xs text-gray-600 dark:text-gray-400 mb-1">
+									{$i18n.t('settings.admin.web.tavilySearchDepth.label')}
+								</div>
+								<SettingsSelect bind:value={webConfig.TAVILY_SEARCH_DEPTH} className="w-full">
+									<option value="ultra-fast">{$i18n.t('Ultra-fast')}</option>
+									<option value="fast">{$i18n.t('Fast')}</option>
+									<option value="basic">{$i18n.t('Basic')}</option>
+									<option value="advanced">{$i18n.t('Advanced')}</option>
+								</SettingsSelect>
 							</div>
 						</div>
 					{:else if webConfig.WEB_SEARCH_ENGINE === 'staan'}
@@ -1207,13 +1232,18 @@
 					/>
 				</AdminSettingRow>
 
-				<AdminSettingRow
-					label={$i18n.t('settings.admin.web.bypassWebLoader.label')}
-					description={$i18n.t('settings.admin.web.bypassWebLoader.description')}
-					let:labelId
-				>
-					<Switch bind:state={webConfig.BYPASS_WEB_SEARCH_WEB_LOADER} ariaLabelledbyId={labelId} />
-				</AdminSettingRow>
+				{#if webConfig.ENABLE_WEB_SEARCH}
+					<AdminSettingRow
+						label={$i18n.t('settings.admin.web.bypassWebLoader.label')}
+						description={$i18n.t('settings.admin.web.bypassWebLoader.description')}
+						let:labelId
+					>
+						<Switch
+							bind:state={webConfig.BYPASS_WEB_SEARCH_WEB_LOADER}
+							ariaLabelledbyId={labelId}
+						/>
+					</AdminSettingRow>
+				{/if}
 
 				<AdminSettingRow
 					label={$i18n.t('settings.admin.web.trustProxyEnvironment.label')}
@@ -1230,8 +1260,10 @@
 				<AdminSettingRow
 					label={$i18n.t('settings.admin.web.webLoaderEngine.label')}
 					description={$i18n.t('settings.admin.web.webLoaderEngine.description')}
+					let:labelId
 				>
 					<SettingsSelect
+						id={`${labelId}-control`}
 						bind:value={webConfig.WEB_LOADER_ENGINE}
 						placeholder={$i18n.t('Select a engine')}
 					>
@@ -1244,7 +1276,23 @@
 					</SettingsSelect>
 				</AdminSettingRow>
 
-				{#if webConfig.WEB_LOADER_ENGINE === '' || webConfig.WEB_LOADER_ENGINE === 'safe_web'}
+				{#if webConfig.WEB_LOADER_ENGINE === 'exa'}
+					{#if webConfig.ENABLE_WEB_SEARCH && webConfig.WEB_SEARCH_ENGINE === 'exa'}
+						<p class="text-xs text-gray-500 dark:text-gray-400">
+							{$i18n.t('Exa search and web loading share the API key configured above.')}
+						</p>
+					{:else}
+						<AdminSettingField label={$i18n.t('settings.admin.web.exaApiKey.label')}>
+							<SensitiveInput
+								variant="settings"
+								placeholder={$i18n.t('Enter Exa API Key')}
+								bind:value={webConfig.EXA_API_KEY}
+							/>
+						</AdminSettingField>
+					{/if}
+				{/if}
+
+				{#if ['', 'safe_web', 'exa'].includes(webConfig.WEB_LOADER_ENGINE)}
 					<AdminSettingField
 						label={$i18n.t('settings.admin.web.timeout.label')}
 						description={$i18n.t('settings.admin.web.timeout.description')}
@@ -1303,7 +1351,7 @@
 							</div>
 						</div>
 					</div>
-				{:else if webConfig.WEB_LOADER_ENGINE === 'firecrawl' && webConfig.WEB_SEARCH_ENGINE !== 'firecrawl'}
+				{:else if webConfig.WEB_LOADER_ENGINE === 'firecrawl' && (!webConfig.ENABLE_WEB_SEARCH || webConfig.WEB_SEARCH_ENGINE !== 'firecrawl')}
 					<div class="mb-2.5 flex w-full flex-col">
 						<div>
 							<div class=" self-center text-xs text-gray-600 dark:text-gray-400 mb-1">
@@ -1355,7 +1403,7 @@
 							</div>
 						</div>
 
-						{#if webConfig.WEB_SEARCH_ENGINE !== 'tavily'}
+						{#if !webConfig.ENABLE_WEB_SEARCH || webConfig.WEB_SEARCH_ENGINE !== 'tavily'}
 							<div class="mt-2">
 								<div class=" self-center text-xs text-gray-600 dark:text-gray-400 mb-1">
 									{$i18n.t('settings.admin.web.tavilyApiKey.label')}
@@ -1371,7 +1419,7 @@
 					</div>
 				{:else if webConfig.WEB_LOADER_ENGINE === 'microsoft_web_iq'}
 					<div class="mb-2.5 flex w-full flex-col">
-						{#if webConfig.WEB_SEARCH_ENGINE !== 'microsoft_web_iq'}
+						{#if !webConfig.ENABLE_WEB_SEARCH || webConfig.WEB_SEARCH_ENGINE !== 'microsoft_web_iq'}
 							<div>
 								<div class=" self-center text-xs text-gray-600 dark:text-gray-400 mb-1">
 									{$i18n.t('settings.admin.web.microsoftWebIqApiBaseUrl.label')}
@@ -1493,7 +1541,7 @@
 	</div>
 	<div class="flex justify-end pt-6 text-sm font-normal">
 		<button
-			class="px-3.5 py-1.5 text-sm font-normal bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
+			class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 			type="submit"
 		>
 			{$i18n.t('Save')}

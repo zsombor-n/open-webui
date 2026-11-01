@@ -124,7 +124,7 @@
 				}
 
 				if (id.startsWith('http://') || id.startsWith('https://')) {
-					_source = { ..._source, name: id, url: id };
+					_source = { ..._source, name: metadata?.external ? _source.name : id, url: id };
 				}
 
 				const existingSource = acc.find((item) => item.id === id);
@@ -226,7 +226,7 @@
 				<button
 					id={`source-${id}-${idx + 1}`}
 					aria-label={$i18n.t('View source: {{name}}', {
-						name: decodeString(citation.source.name)
+						name: `${idx + 1} ${decodeString(citation.source.name)}`
 					})}
 					class="no-toggle outline-hidden flex dark:text-gray-300 bg-transparent text-gray-600 rounded-xl gap-1.5 items-center"
 					on:click={() => {

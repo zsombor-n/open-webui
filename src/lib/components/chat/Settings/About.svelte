@@ -1,12 +1,15 @@
 <script lang="ts">
+	// Keep keys in nested template expressions visible to i18next-parser.
+	// $i18n.t("licensed under");
+
 	import { getVersionUpdates } from '$lib/apis';
 	import { getOllamaVersion } from '$lib/apis/ollama';
-	import { WEBUI_BUILD_HASH, WEBUI_VERSION } from '$lib/constants';
-	import { WEBUI_NAME, config, showChangelog } from '$lib/stores';
+	import { WEBUI_BUILD_CHANNEL, WEBUI_VERSION } from '$lib/constants';
+	import { WEBUI_NAME, config, settings, showChangelog } from '$lib/stores';
 	import { compareVersion } from '$lib/utils';
 	import { onMount, getContext } from 'svelte';
 
-	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import BuildVersion from '$lib/components/common/BuildVersion.svelte';
 	import UserSettingRow from './UserSettingRow.svelte';
 	import UserSettingSection from './UserSettingSection.svelte';
 
@@ -42,7 +45,7 @@
 			return '';
 		});
 
-		if ($config?.features?.enable_version_update_check) {
+		if (WEBUI_BUILD_CHANNEL === 'main' && $config?.features?.enable_version_update_check) {
 			checkForVersionUpdates();
 		}
 	});
@@ -63,16 +66,21 @@
 		>
 			<UserSettingRow description={$i18n.t('settings.personal.about.seeWhatSNew.description')}>
 				<div slot="label" class="flex flex-col text-xs text-gray-600 dark:text-gray-400">
-					<div class="flex gap-1">
-						<Tooltip content={WEBUI_BUILD_HASH}>
-							v{WEBUI_VERSION}
-						</Tooltip>
+					<div
+						class="flex flex-wrap {($settings?.highContrastMode ?? false)
+							? 'items-center'
+							: ''} gap-1"
+					>
+						<BuildVersion />
 
-						{#if $config?.features?.enable_version_update_check}
+						{#if WEBUI_BUILD_CHANNEL === 'main' && $config?.features?.enable_version_update_check}
 							{#if version.latest === null}
 								<span>{$i18n.t('Could not check for updates')}</span>
 							{:else}
 								<a
+									class={($settings?.highContrastMode ?? false)
+										? 'inline-flex min-h-6 items-center'
+										: ''}
 									href="https://github.com/open-webui/open-webui/releases/tag/v{version.latest}"
 									target="_blank"
 								>
@@ -87,7 +95,9 @@
 					</div>
 
 					<button
-						class="self-start {actionButtonClass}"
+						class="self-start {($settings?.highContrastMode ?? false)
+							? 'inline-flex min-h-6 items-center'
+							: ''} {actionButtonClass}"
 						on:click={() => {
 							showChangelog.set(true);
 						}}
@@ -96,7 +106,7 @@
 					</button>
 				</div>
 
-				{#if $config?.features?.enable_version_update_check}
+				{#if WEBUI_BUILD_CHANNEL === 'main' && $config?.features?.enable_version_update_check}
 					<button
 						class={actionButtonClass}
 						on:click={() => {

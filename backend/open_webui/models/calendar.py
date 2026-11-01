@@ -3,8 +3,8 @@ import time
 from typing import Optional
 from uuid import uuid4
 
-from open_webui.internal.db import Base, get_async_db_context
 from open_webui.constants import ERROR_MESSAGES
+from open_webui.internal.db import Base, get_async_db_context
 from open_webui.models.access_grants import AccessGrantModel, AccessGrants
 from open_webui.models.groups import Groups
 from open_webui.models.users import User, UserModel, UserResponse
@@ -176,7 +176,6 @@ class CalendarUpdateForm(BaseModel):
     color: Optional[str] = None
     data: Optional[dict] = None
     meta: Optional[dict] = None
-    access_grants: Optional[list[dict]] = None
 
 
 async def validate_calendar_rrule(value: Optional[str]) -> None:
@@ -291,7 +290,7 @@ class CalendarTable:
     async def get_calendars_by_user(self, user_id: str, db: Optional[AsyncSession] = None) -> list[CalendarModel]:
         """Owned + shared calendars."""
         async with get_async_db_context(db) as db:
-            user_groups = await Groups.get_groups_by_member_id(user_id, db=db)
+            user_groups = await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
             user_group_ids = [g.id for g in user_groups]
 
             stmt = select(Calendar)
@@ -362,8 +361,6 @@ class CalendarTable:
                 cal.data = {**(cal.data or {}), **update_data['data']}
             if 'meta' in update_data:
                 cal.meta = {**(cal.meta or {}), **update_data['meta']}
-            if 'access_grants' in update_data:
-                await AccessGrants.set_access_grants('calendar', id, update_data['access_grants'], db=db)
 
             cal.updated_at = int(time.time_ns())
             await db.commit()
@@ -497,7 +494,7 @@ class CalendarEventTable:
         Recurring events are fetched if they have any rrule (expansion in Python).
         """
         async with get_async_db_context(db) as db:
-            user_groups = await Groups.get_groups_by_member_id(user_id, db=db)
+            user_groups = await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
             user_group_ids = [g.id for g in user_groups]
 
             # Get calendar IDs accessible to user
@@ -599,7 +596,7 @@ class CalendarEventTable:
         db: Optional[AsyncSession] = None,
     ) -> CalendarEventListResponse:
         async with get_async_db_context(db) as db:
-            user_groups = await Groups.get_groups_by_member_id(user_id, db=db)
+            user_groups = await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
             user_group_ids = [g.id for g in user_groups]
 
             # Get accessible calendar IDs

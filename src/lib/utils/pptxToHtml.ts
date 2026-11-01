@@ -1,3 +1,4 @@
+import { OfficePackage, presentationSlides } from './comments/package';
 /**
  * Lightweight PPTX → Image renderer.
  *
@@ -256,6 +257,8 @@ const paragraphAlign = (
 	const align = para.getElementsByTagName('a:pPr')[0]?.getAttribute('algn');
 	if (align === 'ctr') return 'center';
 	if (align === 'r') return 'right';
+	// l and the justified modes the preview cannot draw render from the left
+	if (align) return 'left';
 
 	const type = normalizePlaceholderType(ph?.type ?? '');
 	if (type === 'title' || type === 'subTitle') return 'center';
@@ -967,13 +970,7 @@ export async function pptxToImages(
 	);
 
 	// ── Discover slide files ─────────────────────────────────────────
-	const slideFiles = Object.keys(zip.files)
-		.filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))
-		.sort((a, b) => {
-			const na = parseInt(a.match(/slide(\d+)/)?.[1] ?? '0');
-			const nb = parseInt(b.match(/slide(\d+)/)?.[1] ?? '0');
-			return na - nb;
-		});
+	const slideFiles = await presentationSlides(new OfficePackage(zip as import('jszip')));
 
 	const images: string[] = [];
 

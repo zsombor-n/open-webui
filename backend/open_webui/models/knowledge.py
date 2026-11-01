@@ -169,6 +169,9 @@ class KnowledgeForm(BaseModel):
 
 
 class FileUserResponse(FileModelResponse):
+    directory_id: str | None = None
+    directory_path: str = ''
+    has_original: bool = True
     user: Optional[UserResponse] = None
 
 
@@ -297,7 +300,7 @@ class KnowledgeTable:
                     elif source == 'local':
                         stmt = stmt.filter(
                             or_(
-                                Knowledge.meta.is_(None),
+                                Knowledge.meta['source'].as_string().is_(None),
                                 Knowledge.meta['source'].as_string() != 'external',
                             )
                         )
@@ -481,7 +484,7 @@ class KnowledgeTable:
         if knowledge.user_id == user_id:
             return True
         if user_group_ids is None:
-            user_groups = await Groups.get_groups_by_member_id(user_id, db=db)
+            user_groups = await Groups.get_groups_by_member_id(user_id, db=db, include_inherited=True)
             user_group_ids = {group.id for group in user_groups}
         return await AccessGrants.has_access(
             user_id=user_id,
@@ -535,7 +538,7 @@ class KnowledgeTable:
         try:
             async with get_async_db_context(db) as db:
                 stmt = (
-                    select(File, User)
+                    select(File, User, KnowledgeFile.directory_id)
                     .join(KnowledgeFile, File.id == KnowledgeFile.file_id)
                     .outerjoin(User, User.id == KnowledgeFile.user_id)
                     .filter(KnowledgeFile.knowledge_id == knowledge_id)
@@ -603,9 +606,29 @@ class KnowledgeTable:
                 result = await db.execute(stmt)
                 items = result.all()
 
+                directories = {
+                    directory.id: directory for directory in await self.get_all_directories(knowledge_id, db=db)
+                }
+                paths = {}
+
+                def directory_path(directory_id):
+                    if directory_id not in paths:
+                        names, seen = [], set()
+                        current = directory_id
+                        while current in directories and current not in seen:
+                            seen.add(current)
+                            directory = directories[current]
+                            names.append(directory.name)
+                            current = directory.parent_id
+                        paths[directory_id] = '/'.join(reversed(names))
+                    return paths[directory_id]
+
                 files = [
                     FileUserResponse(
                         id=file.id,
+                        directory_id=directory_id,
+                        directory_path=directory_path(directory_id),
+                        has_original=bool(file.path),
                         user_id=file.user_id,
                         hash=file.hash,
                         filename=file.filename,
@@ -614,7 +637,7 @@ class KnowledgeTable:
                         updated_at=file.updated_at,
                         user=(UserResponse(**UserModel.model_validate(user).model_dump()) if user else None),
                     )
-                    for file, user in items
+                    for file, user, directory_id in items
                 ]
 
                 return KnowledgeFileListResponse(
@@ -645,31 +668,6 @@ class KnowledgeTable:
                 )
                 files = result.scalars().all()
                 return [FileModel.model_validate(file) for file in files]
-        except Exception:
-            return []
-
-    async def get_file_metadatas_by_id(
-        self, knowledge_id: str, db: Optional[AsyncSession] = None
-    ) -> list[FileMetadataResponse]:
-        """Column-only listing: File.data holds each file's full extracted
-        text, which metadata views must never load."""
-        try:
-            async with get_async_db_context(db) as db:
-                result = await db.execute(
-                    select(File.id, File.hash, File.meta, File.created_at, File.updated_at)
-                    .join(KnowledgeFile, File.id == KnowledgeFile.file_id)
-                    .filter(KnowledgeFile.knowledge_id == knowledge_id)
-                )
-                return [
-                    FileMetadataResponse(
-                        id=row.id,
-                        hash=row.hash,
-                        meta=row.meta,
-                        created_at=row.created_at,
-                        updated_at=row.updated_at,
-                    )
-                    for row in result.all()
-                ]
         except Exception:
             return []
 
@@ -769,8 +767,6 @@ class KnowledgeTable:
                     )
                 )
                 await db.commit()
-                if form_data.access_grants is not None:
-                    await AccessGrants.set_access_grants('knowledge', id, form_data.access_grants, db=db)
                 return await self.get_knowledge_by_id(id=id, db=db)
         except Exception as e:
             log.exception(e)
@@ -890,12 +886,38 @@ class KnowledgeTable:
         """Get all files in a KB with their directory_id from KnowledgeFile."""
         try:
             async with get_async_db_context(db) as db:
+                # Leave out File.data: it holds each file's full extracted text, which callers load per file.
                 result = await db.execute(
-                    select(File, KnowledgeFile.directory_id)
+                    select(
+                        File.id,
+                        File.user_id,
+                        File.hash,
+                        File.filename,
+                        File.path,
+                        File.meta,
+                        File.created_at,
+                        File.updated_at,
+                        KnowledgeFile.directory_id,
+                    )
                     .join(KnowledgeFile, File.id == KnowledgeFile.file_id)
                     .filter(KnowledgeFile.knowledge_id == knowledge_id)
                 )
-                return [(FileModel.model_validate(file), dir_id) for file, dir_id in result.all()]
+                return [
+                    (
+                        FileModel(
+                            id=row.id,
+                            user_id=row.user_id,
+                            hash=row.hash,
+                            filename=row.filename,
+                            path=row.path,
+                            meta=row.meta,
+                            created_at=row.created_at,
+                            updated_at=row.updated_at,
+                        ),
+                        row.directory_id,
+                    )
+                    for row in result.all()
+                ]
         except Exception:
             return []
 

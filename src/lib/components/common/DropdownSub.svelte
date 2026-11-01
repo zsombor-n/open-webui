@@ -18,8 +18,10 @@
 	let triggerEl: HTMLElement | null = null;
 	let contentEl: HTMLElement | null = null;
 
-	function trigger(node: HTMLElement) {
+	function trigger(node: HTMLElement, expanded: boolean) {
 		triggerEl = (node.firstElementChild as HTMLElement | null) || node;
+		triggerEl.setAttribute('aria-haspopup', 'menu');
+		triggerEl.setAttribute('aria-expanded', String(expanded));
 
 		async function handleClick(event: MouseEvent) {
 			event.preventDefault();
@@ -37,6 +39,9 @@
 		node.addEventListener('keydown', handleKeydown);
 
 		return {
+			update(expanded: boolean) {
+				triggerEl?.setAttribute('aria-expanded', String(expanded));
+			},
 			destroy() {
 				node.removeEventListener('click', handleClick);
 				node.removeEventListener('keydown', handleKeydown);
@@ -76,7 +81,12 @@
 			contentEl.style.paddingLeft = `${sideOffset}px`;
 		} else {
 			// Open to the left: position flush with trigger, bridge gap with right padding
-			contentEl.style.right = `${window.innerWidth - rect.left}px`;
+			// Neither side fits on narrow screens: overlap the menu to stay on screen
+			const right = Math.min(
+				window.innerWidth - rect.left,
+				window.innerWidth - contentWidth - sideOffset - 16
+			);
+			contentEl.style.right = `${right}px`;
 			contentEl.style.left = 'auto';
 			contentEl.style.paddingRight = `${sideOffset}px`;
 		}
@@ -98,6 +108,12 @@
 		contentEl.style.top = `${top}px`;
 	}
 
+	function markMenuItems() {
+		contentEl
+			?.querySelectorAll('button:not([role]), a[href]:not([role])')
+			.forEach((item) => item.setAttribute('role', 'menuitem'));
+	}
+
 	async function openSub(focus = false) {
 		open = true;
 		await tick();
@@ -105,8 +121,12 @@
 		// Re-position after transition starts rendering real dimensions
 		setTimeout(positionContent, 50);
 
+		markMenuItems();
+
 		if (focus) {
-			contentEl?.focus();
+			(
+				contentEl?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])') ?? contentEl
+			)?.focus();
 		}
 	}
 
@@ -115,7 +135,25 @@
 	}
 
 	function handleContentKeydown(event: KeyboardEvent) {
-		if (event.key !== 'Escape') return;
+		if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && contentEl) {
+			const items = [
+				...contentEl.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([disabled])')
+			].filter((item) => item.getClientRects().length > 0);
+			const index = items.indexOf(event.target as HTMLElement);
+			const nextIndex =
+				event.key === 'Home'
+					? 0
+					: event.key === 'End'
+						? items.length - 1
+						: (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+
+			event.preventDefault();
+			event.stopPropagation();
+			items[nextIndex]?.focus();
+			return;
+		}
+
+		if (event.key !== 'Escape' && event.key !== 'ArrowLeft') return;
 
 		event.stopPropagation();
 		open = false;
@@ -141,8 +179,13 @@
 
 	function portal(node: HTMLElement) {
 		document.body.appendChild(node);
+
+		const mutationObserver = new MutationObserver(markMenuItems);
+		mutationObserver.observe(node, { childList: true, subtree: true });
+
 		return {
 			destroy() {
+				mutationObserver.disconnect();
 				if (node.parentNode) {
 					node.parentNode.removeChild(node);
 				}
@@ -155,7 +198,7 @@
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div
-	use:trigger
+	use:trigger={open}
 	class="w-full {($settings?.highContrastMode ?? false)
 		? '[&>button:hover]:bg-gray-200! dark:[&>button:hover]:bg-gray-800!'
 		: '[&>button:hover]:bg-gray-50/60 dark:[&>button:hover]:bg-gray-800/60'}"

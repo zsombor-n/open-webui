@@ -159,7 +159,7 @@ ENABLE_DB_MIGRATIONS = os.getenv('ENABLE_DB_MIGRATIONS', 'True').lower() == 'tru
 # Swap the JSON encoder/decoder used across the app (HTTP request bodies, JSONResponse
 # bodies, upstream provider responses, socket.io payloads) from the stdlib `json` module
 # to orjson. Faster, but stricter: see open_webui/utils/json_codec.py for the differences.
-ENABLE_ORJSON = os.getenv('ENABLE_ORJSON', 'False').lower() == 'true'
+ENABLE_ORJSON = os.getenv('ENABLE_ORJSON', 'True').lower() == 'true'
 
 
 # Function to parse each section
@@ -493,6 +493,12 @@ else:
 WEBSOCKET_REDIS_URL = os.getenv('WEBSOCKET_REDIS_URL', REDIS_URL)
 WEBSOCKET_REDIS_CLUSTER = os.getenv('WEBSOCKET_REDIS_CLUSTER', str(REDIS_CLUSTER)).lower() == 'true'
 
+# publishes room-targeted emits on per-room redis channels so instances skip
+# messages for rooms without local members; must be identical across the fleet
+# (toggle with a full restart, not a rolling one), set false for the previous
+# shared-channel-only delivery
+WEBSOCKET_REDIS_ROOM_CHANNELS = os.getenv('WEBSOCKET_REDIS_ROOM_CHANNELS', 'True').lower() == 'true'
+
 websocket_redis_lock_timeout = os.getenv('WEBSOCKET_REDIS_LOCK_TIMEOUT', '60')
 
 try:
@@ -668,6 +674,23 @@ try:
 except (ValueError, TypeError):
     AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA = 10
 
+# Terminal requests can provision a container before returning metadata.
+AIOHTTP_CLIENT_TIMEOUT_TERMINAL = os.getenv(
+    'AIOHTTP_CLIENT_TIMEOUT_TERMINAL',
+    os.getenv('AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA', '60'),
+)
+
+if AIOHTTP_CLIENT_TIMEOUT_TERMINAL == '':
+    AIOHTTP_CLIENT_TIMEOUT_TERMINAL = None
+else:
+    try:
+        AIOHTTP_CLIENT_TIMEOUT_TERMINAL = int(AIOHTTP_CLIENT_TIMEOUT_TERMINAL)
+    except (ValueError, TypeError):
+        AIOHTTP_CLIENT_TIMEOUT_TERMINAL = 60
+
+if AIOHTTP_CLIENT_TIMEOUT_TERMINAL is not None and AIOHTTP_CLIENT_TIMEOUT_TERMINAL <= 0:
+    AIOHTTP_CLIENT_TIMEOUT_TERMINAL = None
+
 AIOHTTP_FILE_STREAM_CHUNK_SIZE = os.getenv('AIOHTTP_FILE_STREAM_CHUNK_SIZE', str(1024 * 1024))
 try:
     AIOHTTP_FILE_STREAM_CHUNK_SIZE = int(AIOHTTP_FILE_STREAM_CHUNK_SIZE)
@@ -693,9 +716,11 @@ else:
     except Exception:
         AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER = AIOHTTP_CLIENT_TIMEOUT
 
-# Timeout (in seconds) for the MCP session.initialize() handshake.
-# The handshake performs a list-tools round-trip and can take tens of
-# seconds on cold-start servers or servers exposing many tools.
+# Timeout (in seconds) for each MCP protocol request other than a tool call:
+# the legacy initialize handshake, tool listing and resource reads. Raise it
+# for cold-start servers or servers exposing many tools. The SDK bounds its
+# server/discover probe separately (10s), and tool calls use
+# AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER.
 MCP_INITIALIZE_TIMEOUT = os.getenv('MCP_INITIALIZE_TIMEOUT', '10')
 try:
     MCP_INITIALIZE_TIMEOUT = int(MCP_INITIALIZE_TIMEOUT)
@@ -732,6 +757,15 @@ try:
         AIOHTTP_POOL_DNS_TTL = 300
 except ValueError:
     AIOHTTP_POOL_DNS_TTL = 300
+
+# Target chunks buffered before insertion, rounded up to a whole embedding batch.
+try:
+    RAG_EMBEDDING_BUFFER_SIZE = int(os.getenv('RAG_EMBEDDING_BUFFER_SIZE', '1000'))
+    if RAG_EMBEDDING_BUFFER_SIZE <= 0:
+        raise ValueError
+except ValueError:
+    log.warning('RAG_EMBEDDING_BUFFER_SIZE must be a positive integer. Defaulting to 1000.')
+    RAG_EMBEDDING_BUFFER_SIZE = 1000
 
 RAG_EMBEDDING_TIMEOUT = os.getenv('RAG_EMBEDDING_TIMEOUT', '')
 
@@ -850,6 +884,16 @@ RAG_METADATA_MAX_VALUE_CHARS = (
 MINERU_MAX_MARKDOWN_BYTES = (
     int(os.getenv('MINERU_MAX_MARKDOWN_BYTES')) if os.getenv('MINERU_MAX_MARKDOWN_BYTES') else None
 )
+
+rapidocr_params = os.getenv('RAPIDOCR_PARAMS', '{"EngineConfig.onnxruntime.intra_op_num_threads": 1}')
+try:
+    rapidocr_params = json.loads(rapidocr_params)
+except json.JSONDecodeError:
+    rapidocr_params = {}
+if not isinstance(rapidocr_params, dict):
+    rapidocr_params = {}
+
+RAPIDOCR_PARAMS = rapidocr_params
 
 # When enabled, skips pydub-based preprocessing (format conversion, compression,
 # and chunked splitting) before sending files to processing engines. Useful when
@@ -1186,6 +1230,10 @@ VIEW_FILE_DEFAULT_MAX_CHARS = _int_env('VIEW_FILE_DEFAULT_MAX_CHARS', 10_000)
 ####################################
 
 ENABLE_PLUGINS = os.getenv('ENABLE_PLUGINS', 'True').lower() == 'true'
+# Deployment controls: the master switch always overrides all feature switches.
+ENABLE_TOOLS = ENABLE_PLUGINS and os.getenv('ENABLE_TOOLS', 'True').lower() == 'true'
+ENABLE_FUNCTIONS = ENABLE_PLUGINS and os.getenv('ENABLE_FUNCTIONS', 'True').lower() == 'true'
+ENABLE_TOOL_SERVERS = ENABLE_PLUGINS and os.getenv('ENABLE_TOOL_SERVERS', 'True').lower() == 'true'
 
 ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS = (
     os.getenv('ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS', 'True').lower() == 'true'

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { flyAndScale } from '$lib/utils/transitions';
 	import { tick } from 'svelte';
+	import { mobile } from '$lib/stores';
 
 	/** Whether the dropdown is open */
 	export let show = false;
@@ -11,8 +12,14 @@
 	/** Alignment: 'start' | 'end' */
 	export let align = 'start';
 
+	/** Optional positioning anchor within a larger clickable trigger. */
+	export let anchorElement: HTMLElement | null = null;
+
 	/** Close when clicking outside */
 	export let closeOnOutsideClick = true;
+
+	/** Close action menus after selection. Submenu triggers prevent the default click. */
+	export let closeOnSelect = false;
 
 	/** Called when open/close state changes */
 	export let onOpenChange: (state: boolean) => void = () => {};
@@ -30,6 +37,7 @@
 	export let visualViewportAware = false;
 
 	let triggerEl: HTMLElement | null = null;
+	let triggerControl: HTMLElement | null = null;
 	let contentEl: HTMLElement | null = null;
 	let previouslyFocused: HTMLElement | null = null;
 	let shouldFocusContent = false;
@@ -53,9 +61,14 @@
 		});
 		resizeObserver.observe(node);
 
+		// Items can render after the menu opens, e.g. an async list.
+		const mutationObserver = new MutationObserver(markMenuItems);
+		mutationObserver.observe(node, { childList: true, subtree: true });
+
 		return {
 			destroy() {
 				resizeObserver.disconnect();
+				mutationObserver.disconnect();
 				lastContentHeight = 0;
 				if (node.parentNode) {
 					node.parentNode.removeChild(node);
@@ -65,8 +78,13 @@
 	}
 
 	/** Svelte action: captures the first child element as the trigger reference */
-	function trigger(node: HTMLElement) {
+	function trigger(node: HTMLElement, expanded: boolean) {
 		triggerEl = (node.firstElementChild as HTMLElement | null) || node;
+		triggerControl = node.querySelector<HTMLElement>(
+			'button, a[href], [tabindex]:not([tabindex="-1"])'
+		);
+		triggerControl?.setAttribute('aria-haspopup', 'true');
+		triggerControl?.setAttribute('aria-expanded', String(expanded));
 		function handleClick(e: MouseEvent) {
 			e.preventDefault();
 			toggleOpen();
@@ -74,12 +92,16 @@
 		function handleKeydown(e: KeyboardEvent) {
 			if (e.key === 'Enter' || e.key === ' ') {
 				e.preventDefault();
-				toggleOpen();
+				if (show) closeDropdown();
+				else openDropdown(true);
 			}
 		}
 		node.addEventListener('click', handleClick);
 		node.addEventListener('keydown', handleKeydown);
 		return {
+			update(expanded: boolean) {
+				triggerControl?.setAttribute('aria-expanded', String(expanded));
+			},
 			destroy() {
 				node.removeEventListener('click', handleClick);
 				node.removeEventListener('keydown', handleKeydown);
@@ -110,7 +132,7 @@
 
 	function positionContentDefault() {
 		if (!triggerEl || !contentEl) return;
-		const rect = triggerEl.getBoundingClientRect();
+		const rect = (anchorElement ?? triggerEl).getBoundingClientRect();
 		resolvedMaxHeight = maxHeight;
 
 		contentEl.style.position = 'fixed';
@@ -159,7 +181,7 @@
 
 	function positionContentVisualViewport() {
 		if (!triggerEl || !contentEl) return;
-		const rect = triggerEl.getBoundingClientRect();
+		const rect = (anchorElement ?? triggerEl).getBoundingClientRect();
 		const viewport = visualViewportRect();
 		const viewportRight = viewport.left + viewport.width;
 		const viewportBottom = viewport.top + viewport.height;
@@ -228,8 +250,15 @@
 		}
 	}
 
+	function markMenuItems() {
+		contentEl
+			?.querySelectorAll('button:not([role]), a[href]:not([role])')
+			.forEach((item) => item.setAttribute('role', 'menuitem'));
+	}
+
 	async function afterOpen() {
 		await tick();
+		markMenuItems();
 		positionContent();
 
 		// Re-check after transition renders real dimensions
@@ -241,7 +270,16 @@
 
 		if (shouldFocusContent) {
 			shouldFocusContent = false;
-			contentEl?.focus();
+			const firstControl = contentEl?.querySelector<HTMLElement>(
+				'button:not([disabled]), a[href], input'
+			);
+			(
+				(firstControl?.matches('input')
+					? firstControl
+					: contentEl?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')) ??
+				firstControl ??
+				contentEl
+			)?.focus();
 		}
 	}
 
@@ -268,30 +306,68 @@
 		previouslyFocused = null;
 	}
 
+	function restoreFocusAfterClose() {
+		if (contentEl?.contains(document.activeElement) && previouslyFocused?.isConnected) {
+			previouslyFocused.focus();
+		}
+		previouslyFocused = null;
+	}
+
 	function toggleOpen() {
 		if (show) {
 			closeDropdown();
 		} else {
-			openDropdown(true);
+			openDropdown(!$mobile);
 		}
 	}
 
 	// React to external show changes (e.g. bind:show toggled by parent component)
 	$: if (show) {
 		afterOpen();
+	} else {
+		restoreFocusAfterClose();
 	}
 
-	function handleWindowPointerDown(event: PointerEvent) {
-		if (!show || !closeOnOutsideClick) return;
+	function handleWindowClick(event: MouseEvent) {
+		if (!show || !closeOnOutsideClick || event.detail === 0) return;
 		if (!(event.target instanceof Node)) return;
 		if (triggerEl?.contains(event.target)) return;
 		if (contentEl?.contains(event.target)) return;
+		// Submenus and listboxes can be portaled outside contentEl.
+		const portaled =
+			event.target instanceof Element
+				? event.target.closest('[role="menu"], [role="listbox"]')
+				: null;
+		if (portaled && !portaled.contains(triggerEl)) return;
+		event.preventDefault();
+		event.stopPropagation();
 		closeDropdown(false);
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape' && show) {
 			closeDropdown();
+		}
+
+		if (
+			['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) &&
+			event.target instanceof HTMLElement &&
+			event.target.matches('[role^="menuitem"]') &&
+			contentEl?.contains(event.target)
+		) {
+			const items = [
+				...contentEl.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([disabled])')
+			].filter((item) => item.getClientRects().length > 0);
+			const index = items.indexOf(event.target);
+			const nextIndex =
+				event.key === 'Home'
+					? 0
+					: event.key === 'End'
+						? items.length - 1
+						: (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+
+			event.preventDefault();
+			items[nextIndex]?.focus();
 		}
 	}
 
@@ -302,10 +378,7 @@
 
 	import { onMount, onDestroy } from 'svelte';
 
-	let onPointerDown: ((e: PointerEvent) => void) | undefined;
 	onMount(() => {
-		onPointerDown = (e) => handleWindowPointerDown(e);
-		document.addEventListener('pointerdown', onPointerDown, true);
 		if (visualViewportAware) {
 			window.visualViewport?.addEventListener('resize', scheduleSettledPositionUpdates);
 			window.visualViewport?.addEventListener('scroll', schedulePositionUpdate);
@@ -314,9 +387,6 @@
 	onDestroy(() => {
 		if (positionFrame != null) cancelAnimationFrame(positionFrame);
 		for (const timer of settleTimers) window.clearTimeout(timer);
-		if (onPointerDown) {
-			document.removeEventListener('pointerdown', onPointerDown, true);
-		}
 		if (visualViewportAware) {
 			window.visualViewport?.removeEventListener('resize', scheduleSettledPositionUpdates);
 			window.visualViewport?.removeEventListener('scroll', schedulePositionUpdate);
@@ -325,17 +395,18 @@
 </script>
 
 <svelte:window
+	on:click|capture={handleWindowClick}
 	on:keydown={handleKeydown}
 	on:scroll|capture={positionContent}
 	on:resize={positionContent}
 />
 
 <span
-	use:trigger
+	use:trigger={show}
 	style="display: contents; cursor: pointer;"
-	role="button"
-	aria-haspopup="true"
-	aria-expanded={show}
+	role={triggerControl ? undefined : 'button'}
+	aria-haspopup={triggerControl ? undefined : 'true'}
+	aria-expanded={triggerControl ? undefined : show}
 >
 	<slot />
 </span>
@@ -351,8 +422,12 @@
 		style:max-height={resolvedMaxHeight}
 		style:overflow-y="auto"
 		transition:flyAndScale
-		on:click={(e) => e.stopPropagation()}
+		on:click={(e) => {
+			e.stopPropagation();
+			if (closeOnSelect && !e.defaultPrevented) closeDropdown();
+		}}
 		on:pointerdown={(e) => e.stopPropagation()}
+		on:keydown={handleKeydown}
 	>
 		<slot name="content" />
 	</div>

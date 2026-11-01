@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { flyAndScale } from '$lib/utils/transitions';
 	import { tick } from 'svelte';
+	import { mobile } from '$lib/stores';
 	import DropdownMenu from '$lib/components/common/DropdownMenu.svelte';
 
 	/** Currently selected value */
@@ -66,7 +67,19 @@
 		contentEl.style.position = 'fixed';
 		contentEl.style.zIndex = '9999';
 		contentEl.style.minWidth = `${rect.width}px`;
-		if (side === 'top') {
+
+		const contentHeight = contentEl.offsetHeight || 0;
+		const spaceBelow = window.innerHeight - rect.bottom - 4;
+		const spaceAbove = rect.top - 4;
+
+		let openAbove = side === 'top';
+		if (side === 'bottom' && spaceBelow < contentHeight && spaceAbove > spaceBelow) {
+			openAbove = true;
+		} else if (side === 'top' && spaceAbove < contentHeight && spaceBelow > spaceAbove) {
+			openAbove = false;
+		}
+
+		if (openAbove) {
 			contentEl.style.bottom = `${window.innerHeight - rect.top + 4}px`;
 			contentEl.style.top = 'auto';
 		} else {
@@ -93,11 +106,21 @@
 		}
 	}
 
-	async function toggleOpen() {
+	async function toggleOpen(focusContent = false) {
 		open = !open;
 		if (open) {
 			await tick();
 			positionContent();
+			if (focusContent) {
+				contentEl?.querySelector<HTMLElement>('button:not([disabled]), a[href], input')?.focus();
+			}
+		}
+	}
+
+	function handleTriggerKeydown(event) {
+		if (event.target === triggerEl && (event.key === 'Enter' || event.key === ' ')) {
+			event.preventDefault();
+			toggleOpen(true);
 		}
 	}
 
@@ -111,15 +134,19 @@
 
 	function handleKeydown(event) {
 		if (event.key === 'Escape' && open) {
+			const restoreFocus = contentEl?.contains(document.activeElement);
 			open = false;
 			onClose();
+			if (restoreFocus) triggerEl?.focus();
 		}
 	}
 
 	export function selectItem(item) {
+		const restoreFocus = contentEl?.contains(document.activeElement);
 		value = item.value;
 		open = false;
 		onChange(value);
+		if (restoreFocus) triggerEl?.focus();
 	}
 </script>
 
@@ -135,7 +162,8 @@
 	class="focus-ring {triggerClass}"
 	type="button"
 	aria-expanded={open}
-	on:click={toggleOpen}
+	on:click={() => toggleOpen(!$mobile)}
+	on:keydown={handleTriggerKeydown}
 >
 	<slot name="trigger" {selectedLabel} {open}>
 		<span class={labelClass}>
@@ -149,7 +177,12 @@
 		<DropdownMenu className={contentClass} style={`max-height: ${maxHeight}; overflow-y: auto;`}>
 			<slot {open} {selectItem}>
 				{#each items as item}
-					<button class="focus-ring {itemClass}" type="button" on:click={() => selectItem(item)}>
+					<button
+						class="focus-ring {itemClass}"
+						type="button"
+						aria-pressed={value === item.value}
+						on:click={() => selectItem(item)}
+					>
 						<slot name="item" {item} selected={value === item.value}>
 							{item.label}
 						</slot>

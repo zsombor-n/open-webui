@@ -1,3 +1,5 @@
+import { encode } from 'html-entities';
+
 export type OutputContentPart = {
 	type?: string;
 	text?: unknown;
@@ -12,7 +14,7 @@ export type OutputItem = {
 	status?: string;
 	arguments?: unknown;
 	content?: OutputContentPart[];
-	summary?: OutputContentPart[];
+	summary?: OutputContentPart[] | string;
 	output?: OutputContentPart[];
 	files?: unknown;
 	embeds?: unknown;
@@ -49,6 +51,11 @@ export type OutputDisplayItem =
 			text: string;
 	  }
 	| {
+			type: 'image';
+			id: string;
+			src: string;
+	  }
+	| {
 			type: 'detail_single';
 			id: string;
 			token: OutputDetailToken;
@@ -62,6 +69,11 @@ export type OutputDisplayItem =
 			type: 'file';
 			id: string;
 			item: Record<string, unknown>;
+	  }
+	| {
+			type: 'context_compaction';
+			id: string;
+			summary: string;
 	  };
 
 type ResponseStreamEvent = {
@@ -174,14 +186,15 @@ function getInlineFileFromToolOutput(callItem?: OutputItem, resultItem?: OutputI
 	}
 
 	const result = parseJSONStringValue(getToolResultText(resultItem)) as Record<string, unknown>;
+	const isTerminalFile = result?.source === 'open_terminal' && !!result.terminal_selector;
+	const isOpenWebUIFile = result?.source === 'open_webui';
 	if (
 		!result ||
 		typeof result !== 'object' ||
 		result.type !== 'file' ||
-		result.source !== 'open_terminal' ||
-		result.exists === false ||
 		!result.path ||
-		!result.terminal_selector
+		result.exists === false ||
+		!(isTerminalFile || isOpenWebUIFile)
 	) {
 		return null;
 	}
@@ -228,9 +241,10 @@ function buildToolCallToken(item: OutputItem, toolOutputByCallId: Record<string,
 			name,
 			done: isDone ? 'true' : 'false',
 			status,
-			arguments: stringifyAttribute(item.arguments ?? ''),
-			files: stringifyAttribute(resultItem?.files),
-			embeds: stringifyAttribute(resultItem?.embeds)
+			// ToolCallDisplay HTML-decodes these, like legacy <details> attributes.
+			arguments: encode(stringifyAttribute(item.arguments ?? '')),
+			files: encode(stringifyAttribute(resultItem?.files)),
+			embeds: encode(stringifyAttribute(resultItem?.embeds))
 		}
 	};
 }
@@ -406,6 +420,16 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 			return;
 		}
 
+		if (item.type === 'open_webui:context_compaction') {
+			flushDetails();
+			displayItems.push({
+				type: 'context_compaction',
+				id: item.id ?? `context-compaction-${index}`,
+				summary: typeof item.summary === 'string' ? item.summary : ''
+			});
+			return;
+		}
+
 		if (item.type === 'message') {
 			const text = getMessageText(item);
 			if (text.trim()) {
@@ -414,6 +438,20 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 					type: 'message',
 					id: item.id ?? `message-${index}`,
 					text
+				});
+			}
+			return;
+		}
+
+		if (item.type === 'image_generation_call') {
+			if (typeof item.result === 'string' && item.result) {
+				flushDetails();
+				displayItems.push({
+					type: 'image',
+					id: item.id ?? `image-${index}`,
+					src: item.result.startsWith('data:')
+						? item.result
+						: `data:image/${item.output_format || 'png'};base64,${item.result}`
 				});
 			}
 			return;
@@ -431,6 +469,16 @@ export function buildOutputDisplayItems(output: OutputItem[] = []): OutputDispla
 	});
 
 	flushDetails();
+
+	// Providers can reuse item ids across tool-call rounds.
+	const seenIds = new Set<string>();
+	displayItems.forEach((displayItem, index) => {
+		if (seenIds.has(displayItem.id)) {
+			displayItem.id = `${displayItem.id}-${index}`;
+		}
+		seenIds.add(displayItem.id);
+	});
+
 	return displayItems;
 }
 
@@ -605,7 +653,7 @@ export function applyResponseStreamEvent(
 		if (!event.part) {
 			return nextOutput;
 		}
-		item.summary = [...(item.summary ?? [])];
+		item.summary = Array.isArray(item.summary) ? [...item.summary] : [];
 		const summaryIndex = event.summary_index ?? item.summary.length;
 		setPart(item.summary, summaryIndex, { ...event.part }, { type: 'summary_text', text: '' });
 		return nextOutput;
@@ -620,7 +668,7 @@ export function applyResponseStreamEvent(
 
 		if (deltaType === 'reasoning_summary_text') {
 			const summaryIndex = event.summary_index ?? 0;
-			item.summary = [...(item.summary ?? [])];
+			item.summary = Array.isArray(item.summary) ? [...item.summary] : [];
 			const part = ensurePart(item.summary, summaryIndex, { type: 'summary_text', text: '' });
 			part.text = appendDelta(part.text ?? '', event.delta);
 			return nextOutput;
@@ -686,7 +734,7 @@ export function replaceOutputMessageText(
 		const part = nextContent[partIndex];
 		nextContent[partIndex] = {
 			...part,
-			text: (part.text as string).replace(oldContent, newContent)
+			text: (part.text as string).replace(oldContent, () => newContent)
 		};
 
 		return {
@@ -696,4 +744,24 @@ export function replaceOutputMessageText(
 	});
 
 	return replaced ? nextOutput : output;
+}
+
+export function setOutputText(output: OutputItem[], text: string): OutputItem[] {
+	if (text === getOutputText(output)) {
+		return output;
+	}
+
+	const lastMessage = output.filter((item) => item?.type === 'message').at(-1);
+	if (!lastMessage) {
+		return [
+			...output,
+			{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }
+		];
+	}
+
+	return output.map((item) =>
+		item?.type === 'message'
+			? { ...item, content: item === lastMessage ? [{ type: 'output_text', text }] : [] }
+			: item
+	);
 }

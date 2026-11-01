@@ -4,14 +4,14 @@
 
 	import { getContext, onMount, tick } from 'svelte';
 
-	import { formatFileSize, getLineCount } from '$lib/utils';
+	import { formatFileSize, getLineCount, safeLinkUrl } from '$lib/utils';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { settings } from '$lib/stores';
 	import { getKnowledgeById } from '$lib/apis/knowledge';
 	import { getFileById, getFileContentById } from '$lib/apis/files';
 
 	import CodeBlock from '$lib/components/chat/Messages/CodeBlock.svelte';
-	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
+	import MarkdownDocument from '$lib/components/chat/FileNav/MarkdownDocument.svelte';
 
 	const i18n: any = getContext('i18n');
 
@@ -49,17 +49,17 @@
 	let excelSheetNames: string[] = [];
 	let selectedSheet = '';
 	let excelHtml = '';
-	let excelError = '';
+	let excelError = false;
 	let rowCount = 0;
 
 	// DOCX state
 	let docxData: ArrayBuffer | null = null;
-	let docxError = '';
+	let docxError = false;
 
 	// PPTX state
 	let pptxSlides: string[] = [];
 	let pptxCurrentSlide = 0;
-	let pptxError = '';
+	let pptxError = false;
 
 	let panzoomRef: PanzoomContainer;
 	const resetImageView = () => {
@@ -72,7 +72,7 @@
 
 	$: isMarkdown =
 		item?.meta?.content_type === 'text/markdown' ||
-		(item?.name && item?.name.toLowerCase().endsWith('.md'));
+		(item?.name && /\.(md|markdown|mdx)$/i.test(item.name));
 
 	$: isCode =
 		item?.name &&
@@ -140,7 +140,7 @@
 
 	const loadExcelContent = async () => {
 		try {
-			excelError = '';
+			excelError = false;
 			const [arrayBuffer, { read }] = await Promise.all([
 				getFileContentById(item.id),
 				import('xlsx')
@@ -154,7 +154,7 @@
 			}
 		} catch (error) {
 			console.error('Error loading Excel/CSV file:', error);
-			excelError = $i18n.t('Failed to load Excel/CSV file. Please try downloading it instead.');
+			excelError = true;
 		}
 	};
 
@@ -173,17 +173,17 @@
 
 	const loadDocxContent = async () => {
 		try {
-			docxError = '';
+			docxError = false;
 			docxData = await getFileContentById(item.id);
 		} catch (error) {
 			console.error('Error loading DOCX file:', error);
-			docxError = $i18n.t('Failed to load DOCX file. Please try downloading it instead.');
+			docxError = true;
 		}
 	};
 
 	const loadPptxContent = async () => {
 		try {
-			pptxError = '';
+			pptxError = false;
 			const [arrayBuffer, { pptxToImages }] = await Promise.all([
 				getFileContentById(item.id),
 				import('$lib/utils/pptxToHtml')
@@ -193,7 +193,7 @@
 			pptxCurrentSlide = 0;
 		} catch (error) {
 			console.error('Error loading PPTX file:', error);
-			pptxError = $i18n.t('Failed to load PPTX file. Please try downloading it instead.');
+			pptxError = true;
 		}
 	};
 
@@ -246,11 +246,10 @@
 		loadContent();
 	}
 
+	$: enableFullContent = item?.context === 'full';
+
 	onMount(() => {
 		console.log(item);
-		if (item?.context === 'full') {
-			enableFullContent = true;
-		}
 	});
 </script>
 
@@ -261,21 +260,16 @@
 				<div>
 					<div class=" font-normal text-lg dark:text-gray-100">
 						<a
-							href="#"
+							href={item?.type === 'file'
+								? item?.url?.startsWith('http')
+									? item.url
+									: `${WEBUI_API_BASE_URL}/files/${item?.id ?? item?.tempId}/content`
+								: item?.type === 'collection' && item?.id
+									? `/workspace/knowledge/${item.id}`
+									: safeLinkUrl(item?.url)}
+							target="_blank"
+							rel="noreferrer"
 							class="hover:underline line-clamp-1"
-							on:click|preventDefault={() => {
-								if (item.type === 'file' || item.url) {
-									let fileId = item?.id ?? item?.tempId;
-									window.open(
-										item.type === 'file'
-											? item?.url?.startsWith('http')
-												? item.url
-												: `${WEBUI_API_BASE_URL}/files/${fileId}/content`
-											: item.url,
-										'_blank'
-									);
-								}
-							}}
 						>
 							{item?.name ?? 'File'}
 						</a>
@@ -284,6 +278,7 @@
 
 				<div>
 					<button
+						aria-label={$i18n.t('Close')}
 						on:click={() => {
 							show = false;
 						}}
@@ -309,7 +304,9 @@
 
 							{#if item?.created_at}
 								<div class="capitalize shrink-0">
-									{dayjs(item.created_at * 1000).format('LL')}
+									{dayjs(item.created_at * 1000)
+										.locale($i18n.language)
+										.format('LL')}
 								</div>
 							{/if}
 						{/if}
@@ -445,10 +442,8 @@
 							rawContent.length > CONTENT_PREVIEW_LIMIT &&
 							!expandedContent}
 						{#if $settings?.renderMarkdownInPreviews ?? true}
-							<div
-								class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
-							>
-								<Markdown
+							<div class="max-h-96 overflow-scroll scrollbar-hidden">
+								<MarkdownDocument
 									content={isTruncated ? rawContent.slice(0, CONTENT_PREVIEW_LIMIT) : rawContent}
 									id="file-preview"
 								/>
@@ -477,10 +472,8 @@
 							rawContent.length > CONTENT_PREVIEW_LIMIT &&
 							!expandedContent}
 						{#if $settings?.renderMarkdownInPreviews ?? true}
-							<div
-								class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
-							>
-								<Markdown
+							<div class="max-h-96 overflow-scroll scrollbar-hidden">
+								<MarkdownDocument
 									content={isTruncated ? rawContent.slice(0, CONTENT_PREVIEW_LIMIT) : rawContent}
 									id="file-preview-content"
 								/>
@@ -519,7 +512,7 @@
 					{:else if isExcel}
 						{#if excelError}
 							<div class="text-red-500 text-sm p-4">
-								{excelError}
+								{$i18n.t('Failed to load Excel/CSV file. Please try downloading it instead.')}
 							</div>
 						{:else}
 							{#if excelSheetNames.length > 1}
@@ -560,14 +553,14 @@
 							/>
 						</div>
 					{:else if isMarkdown}
-						<div
-							class="max-h-[60vh] overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
-						>
-							<Markdown content={item.file.data.content} id="markdown-viewer" />
+						<div class="max-h-[60vh] overflow-scroll scrollbar-hidden">
+							<MarkdownDocument content={item.file.data.content} id="markdown-viewer" />
 						</div>
 					{:else if isDocx}
 						{#if docxError}
-							<div class="text-red-500 text-sm p-4">{docxError}</div>
+							<div class="text-red-500 text-sm p-4">
+								{$i18n.t('Failed to load DOCX file. Please try downloading it instead.')}
+							</div>
 						{:else if docxData}
 							<DocxPreview data={docxData} className="h-[60vh]" />
 						{:else}
@@ -575,7 +568,9 @@
 						{/if}
 					{:else if isPptx}
 						{#if pptxError}
-							<div class="text-red-500 text-sm p-4">{pptxError}</div>
+							<div class="text-red-500 text-sm p-4">
+								{$i18n.t('Failed to load PPTX file. Please try downloading it instead.')}
+							</div>
 						{:else if pptxSlides.length > 0}
 							<PptxPreview
 								slides={pptxSlides}
@@ -599,52 +594,3 @@
 		</div>
 	</div>
 </Modal>
-
-<style>
-	:global(.excel-table-container table) {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 0.875rem;
-		line-height: 1.25rem;
-	}
-
-	:global(.excel-table-container table td),
-	:global(.excel-table-container table th) {
-		border-width: 1px;
-		border-style: solid;
-		border-color: var(--color-gray-300, #cdcdcd);
-		padding: 0.5rem 0.75rem;
-		text-align: left;
-	}
-
-	:global(.dark .excel-table-container table td),
-	:global(.dark .excel-table-container table th) {
-		border-color: var(--color-gray-600, #676767);
-	}
-
-	:global(.excel-table-container table th) {
-		background-color: var(--color-gray-100, #ececec);
-		font-weight: 600;
-	}
-
-	:global(.dark .excel-table-container table th) {
-		background-color: var(--color-gray-800, #333);
-		color: var(--color-gray-100, #ececec);
-	}
-
-	:global(.excel-table-container table tr:nth-child(even)) {
-		background-color: var(--color-gray-50, #f9f9f9);
-	}
-
-	:global(.dark .excel-table-container table tr:nth-child(even)) {
-		background-color: rgba(38, 38, 38, 0.5);
-	}
-
-	:global(.excel-table-container table tr:hover) {
-		background-color: var(--color-gray-100, #ececec);
-	}
-
-	:global(.dark .excel-table-container table tr:hover) {
-		background-color: rgba(51, 51, 51, 0.5);
-	}
-</style>

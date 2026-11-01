@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { createEventDispatcher, getContext } from 'svelte';
+	import { settings } from '$lib/stores';
 	import type { CalendarEventModel, CalendarModel } from '$lib/apis/calendar';
 	import CalendarEventChip from './CalendarEventChip.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
 	const dispatch = createEventDispatcher();
 
 	export let events: CalendarEventModel[] = [];
@@ -11,9 +12,18 @@
 	export let visibleCalendarIds: Set<string> = new Set();
 	export let view: 'month' | 'week' | 'day' = 'month';
 	export let currentDate: Date = new Date();
+	export let onNavigate: () => void = () => {};
 
 	const NS = 1_000_000;
-	const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+	$: DAY_NAMES = [
+		$i18n.t('Sun'),
+		$i18n.t('Mon'),
+		$i18n.t('Tue'),
+		$i18n.t('Wed'),
+		$i18n.t('Thu'),
+		$i18n.t('Fri'),
+		$i18n.t('Sat')
+	];
 
 	$: calColorMap = calendars.reduce(
 		(acc, c) => ({ ...acc, [c.id]: c.color }),
@@ -26,7 +36,7 @@
 		const map: Record<string, CalendarEventModel[]> = {};
 		for (const e of filteredEvents) {
 			const startMs = e.start_at / NS;
-			const endMs = (e.end_at || e.start_at) / NS;
+			const endMs = Math.max(startMs, (e.end_at || e.start_at) / NS - 1);
 			// Get local midnight for event start/end
 			const startDate = new Date(startMs);
 			const endDate = new Date(endMs);
@@ -112,14 +122,12 @@
 	}
 
 	function formatHour(h: number): string {
-		if (h === 0) return '12 AM';
-		if (h < 12) return `${h} AM`;
-		if (h === 12) return '12 PM';
-		return `${h - 12} PM`;
+		return new Date(2000, 0, 1, h).toLocaleTimeString($i18n.language, { hour: 'numeric' });
 	}
 
 	function handleDayClick(day: Date) {
 		currentDate = day;
+		onNavigate();
 		const ms = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9).getTime();
 		dispatch('createEvent', { start_at: ms * NS });
 	}
@@ -127,8 +135,7 @@
 	function goToDayView(day: Date) {
 		currentDate = day;
 		view = 'day';
-		dispatch('viewChange', view);
-		dispatch('navigate', { date: currentDate });
+		onNavigate();
 	}
 
 	function handleHourClick(day: Date, hour: number) {
@@ -149,7 +156,7 @@
 			<div class="grid grid-cols-7">
 				{#each DAY_NAMES as day}
 					<div class="px-2 py-1.5 text-xs text-gray-400 dark:text-gray-500 text-left truncate">
-						{$i18n.t(day)}
+						{day}
 					</div>
 				{/each}
 			</div>
@@ -166,7 +173,7 @@
 					{@const row = Math.floor(i / 7)}
 					<button
 						class="p-1 min-h-0 text-left overflow-hidden transition cursor-pointer flex flex-col
-							{isCurrentMonth(day) ? '' : 'opacity-40'}
+							{isCurrentMonth(day) ? '' : ($settings?.highContrastMode ?? false) ? 'opacity-80' : 'opacity-40'}
 							hover:bg-gray-50/80 dark:hover:bg-gray-850/30
 							{col > 0 ? 'border-l border-gray-100/20 dark:border-gray-850/20' : ''}
 							{row > 0 ? 'border-t border-gray-100/20 dark:border-gray-850/20' : ''}"
@@ -175,7 +182,11 @@
 						<div class="flex justify-start px-0.5 mb-0.5">
 							<span
 								class="text-xs w-6 h-6 flex items-center justify-center rounded-full
-								{isToday(day) ? 'bg-blue-500 text-white' : 'text-gray-500 dark:text-gray-400'}"
+								{isToday(day)
+									? ($settings?.highContrastMode ?? false)
+										? 'bg-blue-600 text-white'
+										: 'bg-blue-500 text-white'
+									: 'text-gray-500 dark:text-gray-400'}"
 							>
 								{day.getDate()}
 							</span>
@@ -194,7 +205,7 @@
 									class="text-[0.625rem] text-gray-400 dark:text-gray-500 px-1 mt-auto hover:text-gray-700 dark:hover:text-gray-200 text-left w-full truncate z-10"
 									on:click|stopPropagation={() => goToDayView(day)}
 								>
-									+{dayEvents.length - 3} more
+									{$i18n.t('and {{COUNT}} more', { COUNT: dayEvents.length - 3 })}
 								</div>
 							{/if}
 						</div>
@@ -228,7 +239,9 @@
 										class="text-sm mt-0.5 w-7 h-7 flex items-center justify-center mx-auto rounded-full {isToday(
 											day
 										)
-											? 'bg-blue-500 text-white'
+											? ($settings?.highContrastMode ?? false)
+												? 'bg-blue-600 text-white'
+												: 'bg-blue-500 text-white'
 											: ''}"
 									>
 										{day.getDate()}
@@ -271,7 +284,7 @@
 														class="text-[0.625rem] text-gray-400 dark:text-gray-500 px-1 mt-auto hover:text-gray-700 dark:hover:text-gray-200 text-left w-full truncate z-10"
 														on:click|stopPropagation={() => goToDayView(day)}
 													>
-														+{hourEvents.length - 3} more
+														{$i18n.t('and {{COUNT}} more', { COUNT: hourEvents.length - 3 })}
 													</div>
 												{/if}
 											</div>

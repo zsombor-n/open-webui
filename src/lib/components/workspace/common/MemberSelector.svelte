@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ProfileImage from '$lib/components/chat/Messages/ProfileImage.svelte';
 	import { toast } from 'svelte-sonner';
 	import { getContext, onMount, onDestroy } from 'svelte';
 
@@ -9,6 +10,7 @@
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	import XMark from '$lib/components/icons/XMark.svelte';
+	import Search from '$lib/components/icons/Search.svelte';
 	import Pagination from '$lib/components/common/Pagination.svelte';
 	import ProfilePreview from '$lib/components/channel/Messages/Message/ProfilePreview.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -17,6 +19,8 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import Checkbox from '$lib/components/common/Checkbox.svelte';
 	import { getGroups } from '$lib/apis/groups';
+	import type { App } from '$lib/apis/apps';
+	import Grid from '$lib/components/icons/Grid.svelte';
 
 	export let includeGroups = true;
 	export let includeUsers = true;
@@ -26,6 +30,11 @@
 
 	export let groupIds: string[] = [];
 	export let userIds: string[] = [];
+	export let appIds: string[] = [];
+	export let apps: App[] = [];
+	$: filteredApps = apps.filter((app) =>
+		`${app.name} ${app.slug}`.toLowerCase().includes(query.toLowerCase())
+	);
 
 	let groups: any[] | null = null;
 	let filteredGroups: any[] = [];
@@ -48,6 +57,16 @@
 
 	let selectedGroup: Record<string, any> = {};
 	let selectedUsers: Record<string, any> = {};
+
+	const toggleUser = (user: { id: string; [key: string]: any }) => {
+		if (userIds.includes(user.id)) {
+			userIds = userIds.filter((id) => id !== user.id);
+			delete selectedUsers[user.id];
+		} else {
+			userIds = [...userIds, user.id];
+			selectedUsers[user.id] = user;
+		}
+	};
 
 	let page = 1;
 	let users: any[] | null = null;
@@ -79,7 +98,7 @@
 	const handleSearchInput = () => {
 		clearTimeout(searchDebounceTimer);
 		searchDebounceTimer = setTimeout(() => {
-			getUserList();
+			if (includeUsers) getUserList();
 		}, 300);
 	};
 
@@ -87,15 +106,20 @@
 		clearTimeout(searchDebounceTimer);
 	});
 
-	$: if (page !== null && orderBy !== null && direction !== null) {
+	$: if (includeUsers && page !== null && orderBy !== null && direction !== null) {
 		getUserList();
+	} else if (!includeUsers) {
+		users = [];
+		total = 0;
 	}
 
 	onMount(async () => {
-		groups = await getGroups(localStorage.token, true).catch((error) => {
-			console.error(error);
-			return [];
-		});
+		groups = includeGroups
+			? await getGroups(localStorage.token, true).catch((error) => {
+					console.error(error);
+					return [];
+				})
+			: [];
 
 		if (userIds.length > 0) {
 			userIds.forEach(async (id) => {
@@ -180,34 +204,34 @@
 			</div>
 		{/if}
 
-		<div class="flex gap-1 mb-1">
-			<div class=" flex w-full space-x-2">
-				<div class="flex flex-1">
-					<div class=" self-center ml-1 mr-3">
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 20 20"
-							fill="currentColor"
-							class="w-4 h-4"
+		{#if appIds.length > 0}
+			<div class="mx-1 mb-1.5">
+				<div class="text-xs text-gray-500 mx-0.5 mb-1">{appIds.length} {$i18n.t('Apps')}</div>
+				<div class="flex gap-1 flex-wrap">
+					{#each apps.filter((app) => appIds.includes(app.id)) as app (app.id)}
+						<button
+							type="button"
+							class="inline-flex items-center space-x-1 px-2 py-1 bg-gray-100/50 dark:bg-gray-850 rounded-lg text-xs"
+							on:click={() => (appIds = appIds.filter((id) => id !== app.id))}
 						>
-							<path
-								fill-rule="evenodd"
-								d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z"
-								clip-rule="evenodd"
-							/>
-						</svg>
-					</div>
-					<input
-						class=" w-full text-sm pr-4 py-1 rounded-r-xl outline-hidden bg-transparent"
-						bind:value={query}
-						on:input={handleSearchInput}
-						placeholder={$i18n.t('Search')}
-					/>
+							<span>{app.name}</span><XMark className="size-3" />
+						</button>
+					{/each}
 				</div>
 			</div>
+		{/if}
+		<div class="mb-1 flex items-center gap-1.5 px-1 py-1 text-gray-400">
+			<Search className="size-3.5 shrink-0" />
+			<input
+				class="min-w-0 flex-1 border-0 bg-transparent p-0 text-xs text-gray-900 shadow-none outline-none placeholder:text-gray-400 focus:ring-0 dark:text-gray-100"
+				bind:value={query}
+				on:input={handleSearchInput}
+				placeholder={$i18n.t('Search')}
+				aria-label={$i18n.t('Search')}
+			/>
 		</div>
 
-		{#if filteredUsers.length > 0 || filteredGroups.length > 0}
+		{#if (includeUsers && filteredUsers.length > 0) || (includeGroups && filteredGroups.length > 0) || filteredApps.length > 0}
 			<div class="scrollbar-hidden relative whitespace-nowrap w-full max-w-full">
 				<div class=" text-sm text-left text-gray-500 dark:text-gray-400 w-full max-w-full">
 					<div class="w-full max-h-96 overflow-y-auto rounded-lg">
@@ -260,31 +284,24 @@
 
 							<div>
 								{#each filteredUsers as user (user.id)}
-									<button
+									<div
 										class=" dark:border-gray-850 text-xs flex items-center justify-between w-full"
-										type="button"
-										on:click={() => {
-											if ((userIds ?? []).includes(user.id)) {
-												userIds = userIds.filter((id) => id !== user.id);
-												delete selectedUsers[user.id];
-											} else {
-												userIds = [...userIds, user.id];
-												selectedUsers[user.id] = user;
-											}
-										}}
 									>
-										<div class="px-3 py-1.5 font-normal text-gray-900 dark:text-white flex-1">
+										<div class="px-3 py-1 font-normal text-gray-900 dark:text-white flex-1 min-w-0">
 											<div class="flex items-center gap-2">
 												<ProfilePreview {user} side="right" align="center" sideOffset={6}>
 													<img
 														class="rounded-2xl w-6 h-6 object-cover flex-shrink-0"
 														src={`${WEBUI_API_BASE_URL}/users/${user.id}/profile/image`}
-														alt="user"
+														alt=""
 													/>
 												</ProfilePreview>
-												<Tooltip content={user.email} placement="top-start">
-													<div class="font-normal truncate">{user.name}</div>
-												</Tooltip>
+												<button
+													type="button"
+													class="min-w-0 truncate text-left font-normal"
+													aria-pressed={userIds.includes(user.id)}
+													on:click={() => toggleUser(user)}>{user.name}</button
+												>
 
 												{#if user?.is_active}
 													<div>
@@ -303,11 +320,56 @@
 										<div class="px-3 py-1">
 											<div class=" translate-y-0.5">
 												<Checkbox
+													ariaLabel={user.name || user.email || user.id}
+													on:change={() => toggleUser(user)}
 													state={(userIds ?? []).includes(user.id) ? 'checked' : 'unchecked'}
 												/>
 											</div>
 										</div>
-									</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						{#if filteredApps.length > 0}
+							<div class="text-xs text-gray-500 mb-1 mx-1 mt-3">{$i18n.t('Apps')}</div>
+							<div>
+								{#each filteredApps as app (app.id)}
+									<div class="text-xs flex items-center justify-between w-full">
+										<button
+											type="button"
+											class="px-3 py-1.5 font-normal text-gray-900 dark:text-white flex-1 min-w-0"
+											on:click={() =>
+												(appIds = appIds.includes(app.id)
+													? appIds.filter((id) => id !== app.id)
+													: [...appIds, app.id])}
+										>
+											<div class="flex items-center gap-2">
+												<div
+													class="size-6 rounded-lg bg-gray-100 dark:bg-gray-850 flex items-center justify-center shrink-0"
+												>
+													{#if app.data.manifest.profile_image_url}
+														<ProfileImage
+															src={app.data.manifest.profile_image_url}
+															allowExternal
+															className="size-6 rounded-lg!"
+														/>
+													{:else}<Grid className="size-3.5" />{/if}
+												</div>
+												<span class="truncate">{app.name}</span>
+											</div>
+										</button>
+										<div class="px-3 py-1">
+											<Checkbox
+												ariaLabel={app.name}
+												state={appIds.includes(app.id) ? 'checked' : 'unchecked'}
+												on:change={() =>
+													(appIds = appIds.includes(app.id)
+														? appIds.filter((id) => id !== app.id)
+														: [...appIds, app.id])}
+											/>
+										</div>
+									</div>
 								{/each}
 							</div>
 						{/if}

@@ -28,7 +28,7 @@
 
 	export let show = false;
 
-	let tab = 'tools';
+	let tab = $config?.features?.enable_tools ? 'tools' : 'functions';
 	let selectedId = '';
 
 	let loading = false;
@@ -66,7 +66,11 @@
 					if (valvesSpec.properties[property]?.input?.type === 'multiselect') {
 						continue;
 					}
-					valves[property] = (valves[property] ?? []).join(',');
+					if (valves[property] != null) {
+						valves[property] = (Array.isArray(valves[property]) ? valves[property] : []).join(',');
+					} else {
+						valves[property] = null;
+					}
 				}
 			}
 		}
@@ -79,10 +83,14 @@
 			// Convert string to array
 			for (const property in valvesSpec.properties) {
 				if (valvesSpec.properties[property]?.type === 'array') {
-					if (valvesSpec.properties[property]?.input?.type === 'multiselect') {
-						continue;
+					if (typeof valves[property] === 'string') {
+						valves[property] = (valves[property] ?? '')
+							.split(',')
+							.map((v) => v.trim())
+							.filter((v) => v.length > 0);
+					} else if (valves[property] == null) {
+						valves[property] = null;
 					}
-					valves[property] = (valves[property] ?? '').split(',').map((v) => v.trim());
 				}
 			}
 
@@ -159,10 +167,16 @@
 							bind:value={tab}
 							placeholder={$i18n.t('Select')}
 						>
-							<option value="tools" class="bg-gray-100 dark:bg-gray-800">{$i18n.t('Tools')}</option>
-							<option value="functions" class="bg-gray-100 dark:bg-gray-800"
-								>{$i18n.t('Functions')}</option
-							>
+							{#if $config?.features?.enable_tools}
+								<option value="tools" class="bg-gray-100 dark:bg-gray-800"
+									>{$i18n.t('Tools')}</option
+								>
+							{/if}
+							{#if $config?.features?.enable_functions}
+								<option value="functions" class="bg-gray-100 dark:bg-gray-800"
+									>{$i18n.t('Functions')}</option
+								>
+							{/if}
 						</select>
 					</div>
 

@@ -1,11 +1,22 @@
 """Shared routing helpers for admin-configured terminal servers."""
 
 import asyncio
+import hashlib
 import logging
+import ntpath
 import posixpath
+from pathlib import Path
 from urllib.parse import quote
 
+from open_webui.env import AIOHTTP_CLIENT_TIMEOUT_TERMINAL, ENABLE_TOOL_SERVERS
 from open_webui.utils.chat_id import is_saved_chat_id
+from open_webui.utils.skill_files import (
+    SKILL_CONTENT_MAX_CHARS,
+    bounded_skill_manifest,
+    format_skill_content,
+    skill_content_page,
+    skill_overview,
+)
 
 TERMINAL_CONTEXT_HEADER = 'X-Terminal-Context-Id'
 TERMINAL_CONTEXT_DEFAULT = 'default'
@@ -119,18 +130,22 @@ def terminal_chat_uploads(connection: dict) -> str:
     return value if value in TERMINAL_CHAT_UPLOAD_MODES else 'default'
 
 
-async def get_terminal_request_info(request, user, metadata: dict, extra_params: dict | None = None):
+async def get_terminal_json(
+    request, user, metadata: dict, path: str, extra_params: dict | None = None, *, file: dict | None = None
+):
+    """Read JSON or upload a file through an admin terminal or a personal terminal's browser."""
+    metadata = metadata or {}
+    terminal_id = metadata.get('terminal_id')
+    if not ENABLE_TOOL_SERVERS or not terminal_id:
+        return None
+
+    import aiohttp
+    from open_webui.env import AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL
     from open_webui.models.config import Config
     from open_webui.models.groups import Groups
     from open_webui.models.users import UserModel
     from open_webui.utils.access_control import has_connection_access
-    from open_webui.utils.headers import bearer_auth_header
     from open_webui.utils.tools import build_tool_server_headers
-
-    metadata = metadata or {}
-    terminal_id = metadata.get('terminal_id')
-    if not terminal_id:
-        return None
 
     user_model = user if isinstance(user, UserModel) else UserModel(**user)
     connections = await Config.get('terminal_server.connections', []) or []
@@ -146,7 +161,9 @@ async def get_terminal_request_info(request, user, metadata: dict, extra_params:
             or (config.get('context_id') in {'chat_id', 'automation_id'} and not context_id)
         ):
             return None
-        user_group_ids = {group.id for group in await Groups.get_groups_by_member_id(user_model.id)}
+        user_group_ids = {
+            group.id for group in await Groups.get_groups_by_member_id(user_model.id, include_inherited=True)
+        }
         if not await has_connection_access(user_model, connection, user_group_ids):
             return None
 
@@ -155,7 +172,6 @@ async def get_terminal_request_info(request, user, metadata: dict, extra_params:
             request,
             user_model,
             metadata=metadata,
-            extra_params=extra_params,
         )
         headers['Accept'] = 'application/json'
         headers['X-User-Id'] = user_model.id
@@ -163,66 +179,102 @@ async def get_terminal_request_info(request, user, metadata: dict, extra_params:
             headers['X-Session-Id'] = metadata['chat_id']
         if context_id:
             headers[TERMINAL_CONTEXT_HEADER] = context_id
-        return get_terminal_server_url(connection), headers, cookies
+        body = None
+        if file:
+            from open_webui.models.files import Files
+            from open_webui.storage.provider import Storage
 
-    selector = str(terminal_id).rstrip('/')
-    direct_terminal = next(
-        (
-            server
-            for server in metadata.get('tool_servers') or []
-            if str(server.get('url') or '').rstrip('/') == selector
-        ),
-        None,
-    )
-    if not direct_terminal:
-        return None
+            source = await Files.get_file_by_id(file['id'])
+            if not source or source.user_id != user_model.id or not source.path:
+                return None
+            local_path = await asyncio.to_thread(Storage.get_file, source.path)
+            body = aiohttp.FormData()
+            body.add_field(
+                'file',
+                await asyncio.to_thread(Path(local_path).read_bytes),
+                filename=file['name'],
+                content_type=(source.meta or {}).get('content_type') or 'application/octet-stream',
+            )
+            headers = {key: value for key, value in headers.items() if key.lower() != 'content-type'}
+        timeout = aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_TERMINAL)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                async with session.request(
+                    'POST' if file else 'GET',
+                    f'{get_terminal_server_url(connection)}{path}',
+                    headers=headers,
+                    cookies=cookies,
+                    data=body,
+                    ssl=AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
+                    allow_redirects=False,
+                ) as response:
+                    return await response.json() if 200 <= response.status < 300 else None
+        except TimeoutError as error:
+            raise TimeoutError(
+                f"Terminal '{connection.get('name') or terminal_id}' timed out. "
+                'It may still be starting. Please try again.'
+            ) from error
 
-    headers = {'Accept': 'application/json'}
-    key = str(direct_terminal.get('key') or '').strip()
-    if key:
-        headers.update(bearer_auth_header(key))
-    if metadata.get('chat_id'):
-        headers['X-Session-Id'] = metadata['chat_id']
-    return selector, headers, {}
+    event_caller = (extra_params or {}).get('__event_call__')
+    if event_caller:
+        result = await event_caller(
+            {
+                'type': 'request:terminal',
+                'data': {
+                    'terminal_id': terminal_id,
+                    'path': path,
+                    'session_id': metadata.get('session_id'),
+                    **({'file': file} if file else {}),
+                },
+            }
+        )
+        return result.get('data') if isinstance(result, dict) else None
+    return None
+
+
+async def upload_files_to_terminal(request, user, files: list[dict], metadata: dict, extra_params: dict):
+    """Copy Open WebUI files to the selected terminal, adding terminal_path or terminal_error to each entry."""
+    if not metadata.get('terminal_id') or not files:
+        return
+    try:
+        cwd = await asyncio.wait_for(
+            get_terminal_json(request, user, metadata, '/files/cwd', extra_params),
+            timeout=AIOHTTP_CLIENT_TIMEOUT_TERMINAL,
+        )
+        directory = cwd.get('cwd') if isinstance(cwd, dict) else None
+        if not directory:
+            raise ValueError('Terminal working directory unavailable')
+        path = f'/files/upload?directory={quote(directory, safe="")}'
+        for entry in files:
+            try:
+                # The file ID keeps separate files from overwriting one another.
+                file = {'id': entry['id'], 'name': f'{entry["id"]}{Path(entry["name"]).suffix}'}
+                result = await asyncio.wait_for(
+                    get_terminal_json(request, user, metadata, path, extra_params, file=file),
+                    timeout=AIOHTTP_CLIENT_TIMEOUT_TERMINAL,
+                )
+                if not isinstance(result, dict) or not isinstance(result.get('path'), str) or not result['path']:
+                    raise ValueError('Terminal upload failed')
+                entry['terminal_path'] = result['path']
+            except Exception as error:
+                log.warning('File terminal upload failed (%s)', type(error).__name__)
+                entry['terminal_error'] = 'File saved in Open WebUI, but upload to the selected terminal failed.'
+    except Exception as error:
+        log.warning('File terminal unavailable (%s)', type(error).__name__)
+        for entry in files:
+            entry['terminal_error'] = 'File saved in Open WebUI, but the selected terminal is unavailable.'
 
 
 async def get_terminal_agents_md(request, user, metadata: dict, extra_params: dict | None = None) -> str | None:
     """Load the selected terminal user's home AGENTS.md afresh for this turn."""
-    import aiohttp
-    from open_webui.env import AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL
-
     try:
         async with asyncio.timeout(5):
-            terminal_request = await get_terminal_request_info(request, user, metadata, extra_params)
-            if not terminal_request:
+            data = await get_terminal_json(request, user, metadata, '/files/cwd', extra_params)
+            home = data.get('home') if isinstance(data, dict) else None
+            if not isinstance(home, str) or not (posixpath.isabs(home) or ntpath.isabs(home)):
                 return None
-            base_url, headers, cookies = terminal_request
-            async with aiohttp.ClientSession(
-                headers=headers, cookies=cookies, timeout=aiohttp.ClientTimeout(total=5), trust_env=True
-            ) as session:
-                async with session.get(
-                    f'{base_url.rstrip("/")}/files/cwd',
-                    ssl=AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
-                    allow_redirects=False,
-                ) as response:
-                    if response.status != 200:
-                        log.debug('Skipping terminal AGENTS.md: home lookup returned HTTP %s', response.status)
-                        return None
-                    data = await response.json()
-                home = data.get('home') if isinstance(data, dict) else None
-                if not isinstance(home, str) or not posixpath.isabs(home):
-                    return None
-                path = posixpath.join(home, 'AGENTS.md')
-                async with session.get(
-                    f'{base_url.rstrip("/")}/files/read',
-                    params={'path': path},
-                    ssl=AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
-                    allow_redirects=False,
-                ) as response:
-                    if response.status == 404:
-                        return None
-                    response.raise_for_status()
-                    data = await response.json()
+            path = quote(posixpath.join(home, 'AGENTS.md'), safe='')
+            data = await get_terminal_json(request, user, metadata, f'/files/read?path={path}', extra_params)
 
         content = data.get('content') if isinstance(data, dict) else None
         if not isinstance(content, str) or not content.strip():
@@ -244,30 +296,50 @@ def add_terminal_agents_md(messages: list[dict], agents_md: str) -> list[dict]:
     return messages
 
 
-async def get_terminal_skill(
-    request, user, metadata: dict, skill_name: str, extra_params: dict | None = None
+async def load_terminal_skill(
+    request,
+    user,
+    metadata: dict,
+    skill_name: str,
+    extra_params: dict | None = None,
+    *,
+    refresh: bool = True,
 ) -> dict | None:
-    from urllib.parse import quote
+    """Load the full source internally and pin/check its fingerprint before shaping model output."""
+    skill = await get_terminal_json(
+        request, user, metadata, f'/skills/read?name={quote(skill_name, safe="")}', extra_params
+    )
 
-    import aiohttp
-    from open_webui.env import AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL, AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
-
-    terminal_request = await get_terminal_request_info(request, user, metadata, extra_params)
-    if not terminal_request:
+    if not isinstance(skill, dict) or not isinstance(skill.get('content'), str):
         return None
-    base_url, headers, cookies = terminal_request
 
-    timeout = aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA)
-    async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
-        async with session.get(
-            f'{base_url.rstrip("/")}/skills/{quote(skill_name, safe="")}',
-            headers=headers,
-            cookies=cookies,
-            ssl=AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
-        ) as response:
-            skill = await response.json() if response.status == 200 else None
+    context = metadata.get('chat_context') or {}
+    metadata['chat_context'] = context
+    fingerprints = context.setdefault('terminal_skill_fingerprints', {}).setdefault(metadata['terminal_id'], {})
+    skill_id = f'terminal:{quote(skill_name, safe="")}'
+    fingerprint = hashlib.sha256(skill['content'].encode('utf-8')).hexdigest()
+    previous = fingerprints.get(skill_id)
+    if not refresh and previous is not None and previous != fingerprint:
+        raise ValueError('Skill changed while reading. Call view_skill again and restart reading.')
+    fingerprints[skill_id] = fingerprint
+    return skill
 
-    if not isinstance(skill, dict):
+
+async def get_terminal_skill(
+    request,
+    user,
+    metadata: dict,
+    skill_name: str,
+    extra_params: dict | None = None,
+    *,
+    offset: int = 0,
+    max_chars: int = SKILL_CONTENT_MAX_CHARS,
+    refresh: bool = True,
+    overview: bool = False,
+    tools_enabled: bool = True,
+) -> dict | None:
+    skill = await load_terminal_skill(request, user, metadata, skill_name, extra_params, refresh=refresh)
+    if skill is None:
         return None
 
     location = skill.get('location') or skill.get('path') or ''
@@ -276,21 +348,29 @@ async def get_terminal_skill(
     return {
         'name': skill.get('name'),
         'description': skill.get('description'),
-        'content': skill.get('content'),
         'directory': directory,
-        'resources': resources,
+        **(
+            await skill_overview(skill['content'], resources, 'resources', tools_enabled)
+            if overview
+            else {
+                **await skill_content_page(skill['content'], offset, max_chars),
+                **bounded_skill_manifest(resources, 'resources'),
+            }
+        ),
     }
 
 
-def format_terminal_skill_context(skill: dict) -> str:
+def format_terminal_skill_context(skill: dict, skill_id: str, tools_enabled: bool) -> str:
     resources = skill.get('resources') if isinstance(skill.get('resources'), list) else []
-    parts = [f'<skill name="{skill.get("name") or ""}">', skill.get('content') or '']
+    parts = [f'<skill name="{skill.get("name") or ""}">', format_skill_content(skill, skill_id, tools_enabled)]
     if skill.get('directory'):
         parts.append(f'<directory>{skill["directory"]}</directory>')
     if resources:
         parts.append('<resources>')
         parts.extend(f'<file>{resource}</file>' for resource in resources)
         parts.append('</resources>')
+    if skill.get('notice'):
+        parts.append(skill['notice'])
     parts.append('</skill>')
     return '\n'.join(parts)
 

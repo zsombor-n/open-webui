@@ -26,7 +26,7 @@
 	import LinkSlash from '../icons/LinkSlash.svelte';
 	import Clipboard from '../icons/Clipboard.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
 
 	export let show = false;
 
@@ -161,6 +161,7 @@
 							<div class="self-center pl-1.5 pr-1 translate-y-[0.5px] rounded-l-xl bg-transparent">
 								<button
 									class="p-0.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+									aria-label={$i18n.t('Clear search')}
 									on:click={() => {
 										query = '';
 										selectedIdx = 0;
@@ -301,14 +302,16 @@
 									<div class="{showUserInfo ? 'w-28' : 'basis-2/5'} flex items-center justify-end">
 										<div class="hidden sm:flex text-gray-500 dark:text-gray-400 text-xs">
 											{$i18n.t(
-												dayjs(chat?.updated_at * 1000).calendar(null, {
-													sameDay: '[Today]',
-													nextDay: '[Tomorrow]',
-													nextWeek: 'dddd',
-													lastDay: '[Yesterday]',
-													lastWeek: '[Last] dddd',
-													sameElse: 'L' // use localized format, otherwise dayjs.calendar() defaults to DD/MM/YYYY
-												})
+												dayjs(chat?.updated_at * 1000)
+													.locale($i18n.language)
+													.calendar(null, {
+														sameDay: '[Today]',
+														nextDay: '[Tomorrow]',
+														nextWeek: 'dddd',
+														lastDay: '[Yesterday]',
+														lastWeek: '[Last] dddd',
+														sameElse: 'L' // use localized format, otherwise dayjs.calendar() defaults to DD/MM/YYYY
+													})
 											)}
 										</div>
 

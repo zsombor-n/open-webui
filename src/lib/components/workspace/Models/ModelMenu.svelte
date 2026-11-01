@@ -1,4 +1,5 @@
 <script lang="ts">
+	import LockClosed from '$lib/components/icons/LockClosed.svelte';
 	import { getContext } from 'svelte';
 
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
@@ -15,10 +16,17 @@
 	import Pin from '$lib/components/icons/Pin.svelte';
 	import PinSlash from '$lib/components/icons/PinSlash.svelte';
 
-	import { config, user as currentUser, pinnedModels, settings } from '$lib/stores';
+	import {
+		config,
+		user as currentUser,
+		pinnedModels,
+		settings,
+		visibleControls
+	} from '$lib/stores';
 	import Link from '$lib/components/icons/Link.svelte';
+	import { resolveLocalizedModelName } from '$lib/utils/localizedContent';
 
-	const i18n = getContext('i18n');
+	const i18n = getContext<any>('i18n');
 
 	export let user;
 	export let model;
@@ -32,6 +40,7 @@
 	export let hideHandler: Function;
 	export let pinModelHandler: Function;
 	export let deleteHandler: Function;
+	export let accessHandler: (() => void) | null = null;
 	export let onClose: Function;
 
 	export let writeAccess: boolean = true;
@@ -54,6 +63,11 @@
 >
 	<Tooltip content={$i18n.t('More')}>
 		<button
+			type="button"
+			class="focus-ring rounded-lg"
+			aria-label={`${$i18n.t('More')}: ${resolveLocalizedModelName(model, $i18n.language)}`}
+			aria-haspopup="menu"
+			aria-expanded={show}
 			on:click={(e) => {
 				e.stopPropagation();
 				show = !show;
@@ -72,6 +86,18 @@
 				>
 					<Pencil />
 					<div class="flex items-center">{$i18n.t('Edit')}</div>
+				</button>
+			{/if}
+			{#if accessHandler && writeAccess}
+				<button
+					type="button"
+					class="select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
+					on:click={() => {
+						runAndClose(() => accessHandler?.());
+					}}
+				>
+					<LockClosed className="size-3.5" />
+					<div class="flex items-center">{$i18n.t('Access')}</div>
 				</button>
 			{/if}
 
@@ -127,24 +153,26 @@
 				</button>
 			{/if}
 
-			<button
-				class="select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
-				on:click={() => runAndClose(() => pinModelHandler(model?.id))}
-			>
-				{#if $pinnedModels.includes(model?.id)}
-					<PinSlash />
-				{:else}
-					<Pin />
-				{/if}
-
-				<div class="flex items-center">
+			{#if $visibleControls['models.pin']}
+				<button
+					class="select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] hover:text-gray-900 dark:hover:text-gray-100"
+					on:click={() => runAndClose(() => pinModelHandler(model?.id))}
+				>
 					{#if $pinnedModels.includes(model?.id)}
-						{$i18n.t('Hide from Sidebar')}
+						<PinSlash />
 					{:else}
-						{$i18n.t('Keep in Sidebar')}
+						<Pin />
 					{/if}
-				</div>
-			</button>
+
+					<div class="flex items-center">
+						{#if $pinnedModels.includes(model?.id)}
+							{$i18n.t('Hide from Sidebar')}
+						{:else}
+							{$i18n.t('Keep in Sidebar')}
+						{/if}
+					</div>
+				</button>
+			{/if}
 
 			{#if writeAccess}
 				<button

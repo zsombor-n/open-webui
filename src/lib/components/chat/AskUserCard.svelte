@@ -3,6 +3,7 @@
 	import { onDestroy } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
+	import { settings } from '$lib/stores';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 
 	const i18n: Writable<i18nType> = getContext('i18n');
@@ -171,7 +172,10 @@
 </script>
 
 {#if show}
-	<section class="my-1 rounded-2xl bg-gray-50/70 px-3.5 py-3 dark:bg-white/[0.035]">
+	<section
+		dir={$settings?.chatDirection ?? 'auto'}
+		class="my-1 rounded-2xl bg-gray-50/70 px-3.5 py-3 dark:bg-white/[0.035]"
+	>
 		<div class="space-y-2">
 			{#if question}
 				{#key question.id}
@@ -199,7 +203,7 @@
 								{#each question.options || [] as option, optionIndex}
 									<button
 										type="button"
-										class="group flex w-full min-w-0 items-baseline gap-2 rounded-lg py-1.5 text-left transition-colors {isSelectedOption(
+										class="group flex w-full min-w-0 items-baseline gap-2 rounded-lg py-1.5 text-start transition-colors {isSelectedOption(
 											question,
 											optionIndex
 										)
@@ -241,6 +245,7 @@
 										{$i18n.t('Other')}
 									</div>
 									<input
+										dir={$settings?.chatDirection ?? 'auto'}
 										class="min-w-0 flex-1 bg-transparent text-xs text-gray-800 outline-hidden placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
 										placeholder={$i18n.t('Type your answer')}
 										value={otherText(question)}
@@ -265,14 +270,14 @@
 				<div class="flex items-center gap-1.5">
 					<button
 						type="button"
-						class="rounded-full py-1 pr-2.5 text-xs text-gray-500 transition-colors hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
+						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal transition disabled:opacity-60 text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
 						on:click={cancel}
 					>
 						{$i18n.t('Cancel')}
 					</button>
 					<button
 						type="button"
-						class="rounded-full px-2.5 py-1 text-xs text-gray-500 transition-colors hover:text-gray-800 disabled:opacity-30 dark:text-gray-400 dark:hover:text-gray-100"
+						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-normal transition disabled:opacity-60 text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
 						disabled={questionIndex === 0}
 						on:click={() => (questionIndex -= 1)}
 					>
@@ -282,7 +287,7 @@
 				{#if questionIndex < questions.length - 1}
 					<button
 						type="button"
-						class="rounded-full bg-gray-900 px-3 py-1 text-xs font-medium text-white transition hover:opacity-90 active:scale-[0.98] dark:bg-white dark:text-black"
+						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
 						on:click={() => (questionIndex += 1)}
 					>
 						{$i18n.t('Next')}
@@ -290,7 +295,7 @@
 				{:else}
 					<button
 						type="button"
-						class="rounded-full bg-gray-900 px-3 py-1 text-xs font-medium text-white transition hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-black"
+						class="flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-gray-900 px-2.5 text-xs font-normal text-white transition hover:bg-black disabled:opacity-60 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white disabled:cursor-not-allowed"
 						disabled={!complete}
 						on:click={() => submit()}
 					>

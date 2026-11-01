@@ -191,7 +191,7 @@ async function executeCode(
 
 	try {
 		// check if matplotlib is imported in the code
-		if (code.includes('matplotlib')) {
+		if (code.includes('matplotlib') && 'matplotlib' in self.pyodide.loadedPackages) {
 			// Override plt.show() to return base64 image
 			await self.pyodide.runPythonAsync(`import base64
 import os
@@ -346,7 +346,10 @@ function processResult(result: any): any {
 		}
 		if (typeof result.toJs === 'function') {
 			// If it's a Pyodide proxy object (e.g., Pandas DF, Numpy Array), convert to JS and process recursively
-			return processResult(result.toJs());
+			const converted = result.toJs();
+			return typeof converted?.toJs === 'function'
+				? converted.toString()
+				: processResult(converted);
 		}
 		if (typeof result === 'object') {
 			// Convert JS objects to a recursively serialized representation

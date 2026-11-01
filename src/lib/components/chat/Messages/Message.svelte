@@ -43,11 +43,16 @@
 	export let forkHandler: Function | null = null;
 	export let triggerScroll;
 	export let readOnly = false;
+	export let shareMode: 'continue' | null = null;
 	export let allowDelete = true;
 	export let compactPreview = false;
 	export let editCodeBlock = true;
 	export let topPadding = false;
 	export let onInsertToNote: ((content: string) => void) | null = null;
+
+	// Keep the latest turn's real height when assigning a chat ID remounts the message list.
+	$: isCurrentTurn =
+		messageId === history.currentId || messageId === history.messages[history.currentId]?.parentId;
 
 	// WebKit's content-visibility implementation has paint bugs that leave
 	// on-screen messages blank (#26712), so skip virtualization there
@@ -62,7 +67,7 @@
 	class="flex flex-col justify-between px-3.5 mb-3 w-full {($settings?.widescreenMode ?? null)
 		? 'max-w-full'
 		: 'max-w-[58rem]'} mx-auto rounded-lg group message-listitem"
-	class:message-virtualized={!isWebKit}
+	class:message-virtualized={!isWebKit && !isCurrentTurn}
 >
 	{#if history.messages[messageId]}
 		{#if history.messages[messageId].role === 'user'}
@@ -84,11 +89,12 @@
 				{deleteMessage}
 				{allowDelete}
 				{readOnly}
+				{shareMode}
 				{compactPreview}
 				{editCodeBlock}
 				{topPadding}
 			/>
-		{:else if (history.messages[history.messages[messageId].parentId]?.models?.length ?? 1) === 1}
+		{:else if compactPreview || (history.messages[history.messages[messageId].parentId]?.models?.length ?? 1) === 1}
 			<ResponseMessage
 				{chatId}
 				{history}
@@ -118,6 +124,7 @@
 				{editCodeBlock}
 				{topPadding}
 				{onInsertToNote}
+				{shareMode}
 			/>
 		{:else}
 			{#key messageId}
@@ -148,6 +155,7 @@
 					{editCodeBlock}
 					{topPadding}
 					{onInsertToNote}
+					{shareMode}
 				/>
 			{/key}
 		{/if}

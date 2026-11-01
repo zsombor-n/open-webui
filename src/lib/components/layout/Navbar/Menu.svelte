@@ -18,7 +18,8 @@
 		settings,
 		folders,
 		showEmbeds,
-		artifactContents
+		artifactContents,
+		visibleControls
 	} from '$lib/stores';
 
 	import { getChatById } from '$lib/apis/chats';
@@ -36,6 +37,7 @@
 	import GarbageBin from '$lib/components/icons/GarbageBin.svelte';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Download from '$lib/components/icons/Download.svelte';
+	import EditPencilIcon from '$lib/components/layout/Sidebar/icons/EditPencil.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -43,6 +45,7 @@
 	export let readOnly: boolean = false;
 
 	export let shareHandler: Function;
+	export let renameHandler: Function;
 	export let moveChatHandler: Function;
 
 	export let archiveChatHandler: Function;
@@ -111,63 +114,102 @@
 					// Let the browser compute layout for the cloned element
 					await new Promise((r) => requestAnimationFrame(r));
 
-					// Render entire content once
-					const canvas = await html2canvas(clonedElement, {
-						backgroundColor: isDarkMode ? '#000' : '#fff',
-						useCORS: true,
-						scale: 2, // increase resolution
-						width: virtualWidth
-					});
-
-					document.body.removeChild(clonedElement);
-
 					const pdf = new jsPDF('p', 'mm', 'a4');
 					const pageWidthMM = 210;
 					const pageHeightMM = 297;
 
-					// Convert page height in mm to px on canvas scale for cropping
-					// Get canvas DPI scale:
-					const pxPerMM = canvas.width / virtualWidth; // width in px / width in px?
-					// Since 1 page width is 210 mm, but canvas width is 800 px at scale 2
-					// Assume 1 mm = px / (pageWidthMM scaled)
-					// Actually better: Calculate scale factor from px/mm:
-					// virtualWidth px corresponds directly to 210mm in PDF, so pxPerMM:
-					const pxPerPDFMM = canvas.width / pageWidthMM; // canvas px per PDF mm
+					const pagePixelHeight = Math.floor((virtualWidth * pageHeightMM) / pageWidthMM);
+					const rootTop = clonedElement.getBoundingClientRect().top;
+					const contentHeight = Math.ceil(clonedElement.getBoundingClientRect().height);
 
-					// Height in px for one page slice:
-					const pagePixelHeight = Math.floor(pxPerPDFMM * pageHeightMM);
+					const blocks = [];
+					const trackedElements = new Set();
+					const collectBlocks = (element) => {
+						const children = Array.from(element.children);
+						const splittable =
+							children.length > 0 &&
+							(getComputedStyle(element).display === 'contents' ||
+								(element.getBoundingClientRect().height > pagePixelHeight / 4 &&
+									!Array.from(element.childNodes).some(
+										(childNode) =>
+											childNode.nodeType === Node.TEXT_NODE && childNode.textContent?.trim()
+									) &&
+									children.every(
+										(child) => !getComputedStyle(child).display.startsWith('inline')
+									)));
+
+						if (element !== clonedElement) trackedElements.add(element);
+
+						if (splittable) {
+							children.forEach(collectBlocks);
+						} else {
+							const { top, bottom } = element.getBoundingClientRect();
+							blocks.push({ element, top: top - rootTop, bottom: bottom - rootTop });
+						}
+					};
+					collectBlocks(clonedElement);
+
+					clonedElement.setAttribute('data-pdf-root', '');
 
 					let offsetY = 0;
 					let page = 0;
 
-					while (offsetY < canvas.height) {
-						// Height of slice
-						const sliceHeight = Math.min(pagePixelHeight, canvas.height - offsetY);
-
-						// Create temp canvas for slice
-						const pageCanvas = document.createElement('canvas');
-						pageCanvas.width = canvas.width;
-						pageCanvas.height = sliceHeight;
-
-						const ctx = pageCanvas.getContext('2d');
-
-						// Draw the slice of original canvas onto pageCanvas
-						ctx.drawImage(
-							canvas,
-							0,
-							offsetY,
-							canvas.width,
-							sliceHeight,
-							0,
-							0,
-							canvas.width,
-							sliceHeight
+					while (offsetY < contentHeight) {
+						const sliceHeight = Math.min(pagePixelHeight, contentHeight - offsetY);
+						const sliceBlocks = blocks.filter(
+							(block) => block.bottom > offsetY && block.top < offsetY + sliceHeight
 						);
 
-						const imgData = pageCanvas.toDataURL('image/jpeg', 0.7);
+						const keptElements = new Set();
+						for (const { element } of sliceBlocks) {
+							for (
+								let current = element;
+								current && current !== clonedElement;
+								current = current.parentElement
+							) {
+								keptElements.add(current);
+							}
+						}
 
-						// Calculate image height in PDF units keeping aspect ratio
-						const imgHeightMM = (sliceHeight * pageWidthMM) / canvas.width;
+						const anchor = sliceBlocks.find((block) => block.bottom > block.top);
+						anchor?.element.setAttribute('data-pdf-anchor', '');
+
+						const canvas = await html2canvas(clonedElement, {
+							backgroundColor: isDarkMode ? '#000' : '#fff',
+							useCORS: true,
+							logging: false,
+							scale: 2, // increase resolution
+							width: virtualWidth,
+							height: sliceHeight,
+							y: offsetY,
+							ignoreElements: (element) =>
+								(element.parentElement === document.body &&
+									element !== clonedElement &&
+									!['STYLE', 'LINK'].includes(element.tagName)) ||
+								(trackedElements.has(element) && !keptElements.has(element)),
+							onclone: (clonedDocument) => {
+								const clonedRoot = clonedDocument.querySelector('[data-pdf-root]');
+								const clonedAnchor = clonedDocument.querySelector('[data-pdf-anchor]');
+								if (!clonedRoot || !clonedAnchor) return;
+
+								const spacer = clonedDocument.createElement('div');
+								clonedRoot.prepend(spacer);
+
+								let spacerHeight = 0;
+								for (let pass = 0; pass < 2; pass++) {
+									spacerHeight +=
+										anchor.top -
+										(clonedAnchor.getBoundingClientRect().top -
+											clonedRoot.getBoundingClientRect().top);
+									spacer.style.height = `${spacerHeight}px`;
+								}
+							}
+						});
+
+						anchor?.element.removeAttribute('data-pdf-anchor');
+
+						const imgData = canvas.toDataURL('image/jpeg', 0.7);
+						const imgHeightMM = (sliceHeight * pageWidthMM) / virtualWidth;
 
 						if (page > 0) pdf.addPage();
 
@@ -181,6 +223,8 @@
 						offsetY += sliceHeight;
 						page++;
 					}
+
+					document.body.removeChild(clonedElement);
 
 					pdf.save(`chat-${chat.chat.title}.pdf`);
 
@@ -278,6 +322,7 @@
 {/if}
 
 <Dropdown
+	closeOnSelect
 	onOpenChange={(state) => {
 		if (state === false) {
 			onClose();
@@ -347,7 +392,7 @@
 				<hr class="border-gray-50/30 dark:border-gray-800/30 mx-1 my-0.5" />
 			{/if}
 
-			{#if ($artifactContents ?? []).length > 0}
+			{#if ($artifactContents ?? []).length > 0 && $visibleControls['chat.artifacts']}
 				<button
 					draggable="false"
 					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
@@ -423,23 +468,38 @@
 				</DropdownSub>
 			{/if}
 
-			<button
-				draggable="false"
-				class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-				id="chat-copy-button"
-				on:click={async () => {
-					const res = await copyToClipboard(await getChatAsText()).catch((e) => {
-						console.error(e);
-					});
+			{#if (!readOnly || $folders.find((folder) => folder.id === chat?.folder_id)?.user_id === $user?.id) && !$temporaryChatEnabled && chat?.id}
+				<button
+					draggable="false"
+					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+					on:click={() => {
+						renameHandler();
+					}}
+				>
+					<EditPencilIcon className="size-3.5" strokeWidth="1.5" />
+					<div class="flex items-center">{$i18n.t('Rename')}</div>
+				</button>
+			{/if}
 
-					if (res) {
-						toast.success($i18n.t('Copied to clipboard'));
-					}
-				}}
-			>
-				<Clipboard className="size-3.5" strokeWidth="1.5" />
-				<div class="flex items-center">{$i18n.t('Copy')}</div>
-			</button>
+			{#if $user?.role === 'admin' || ($user.permissions?.chat?.export ?? true)}
+				<button
+					draggable="false"
+					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+					id="chat-copy-button"
+					on:click={async () => {
+						const res = await copyToClipboard(await getChatAsText()).catch((e) => {
+							console.error(e);
+						});
+
+						if (res) {
+							toast.success($i18n.t('Copied to clipboard'));
+						}
+					}}
+				>
+					<Clipboard className="size-3.5" strokeWidth="1.5" />
+					<div class="flex items-center">{$i18n.t('Copy')}</div>
+				</button>
+			{/if}
 
 			{#if !readOnly && !$temporaryChatEnabled && chat?.id}
 				<hr class="border-gray-50/30 dark:border-gray-800/30 mx-1 my-0.5" />
@@ -475,16 +535,20 @@
 					</DropdownSub>
 				{/if}
 
-				<button
-					draggable="false"
-					class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-					on:click={() => {
-						archiveChatHandler();
-					}}
-				>
-					<ArchiveBox className="size-3.5" strokeWidth="1.5" />
-					<div class="flex items-center">{$i18n.t('Archive')}</div>
-				</button>
+				{#if $visibleControls['chat.archive']}
+					<button
+						draggable="false"
+						class="flex h-[1.6875rem] w-full items-center gap-2 rounded-xl px-2 text-[0.8125rem] cursor-pointer select-none hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
+						on:click={() => {
+							archiveChatHandler();
+						}}
+					>
+						<ArchiveBox className="size-3.5" strokeWidth="1.5" />
+						<div class="flex items-center">
+							{chat?.archived ? $i18n.t('Unarchive') : $i18n.t('Archive')}
+						</div>
+					</button>
+				{/if}
 
 				{#if $user?.role === 'admin' || ($user?.permissions?.chat?.delete ?? true)}
 					<button
@@ -499,11 +563,14 @@
 					</button>
 				{/if}
 
-				<hr class="border-gray-50/30 dark:border-gray-800/30 mx-1 my-0.5" />
+				{#if $visibleControls['chat.tags']}
+					<hr class="border-gray-50/30 dark:border-gray-800/30 mx-1 my-0.5" />
 
-				<div class="flex max-h-28 overflow-y-auto px-2 py-1">
-					<Tags chatId={chat.id} />
-				</div>
+					<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+					<div class="flex max-h-28 overflow-y-auto px-2 py-1" on:click={(e) => e.preventDefault()}>
+						<Tags chatId={chat.id} />
+					</div>
+				{/if}
 			{/if}
 		</DropdownMenu>
 	</div>
