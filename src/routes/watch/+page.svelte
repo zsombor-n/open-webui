@@ -6,11 +6,8 @@
 		// Get the current URL search parameters
 		const params = new URLSearchParams(window.location.search);
 
-		// Check if 'v' parameter exists
-		if (params.has('v')) {
-			// Get the value of 'v' parameter
-			const videoId = params.get('v');
-
+		const videoId = params.get('v');
+		if (videoId !== null) {
 			// Redirect to root with 'youtube' parameter
 
 			goto(`/?youtube=${encodeURIComponent(videoId)}`);

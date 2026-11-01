@@ -21,23 +21,27 @@
 		updateUserTimezone
 	} from '$lib/apis/auths';
 
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
-	import { WEBUI_NAME, config, user, socket } from '$lib/stores';
+	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { WEBUI_NAME, config, user, socket, type SessionUser } from '$lib/stores';
 
-	import { generateInitialsImage, canvasPixelTest, getUserTimezone } from '$lib/utils';
+	import { generateInitialsImage, getUserTimezone } from '$lib/utils';
 
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import OnBoarding from '$lib/components/OnBoarding.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
-	import { redirect } from '@sveltejs/kit';
 
-	const i18n = getContext('i18n');
+	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
+	type AuthResult =
+		| (SessionUser & { token?: string })
+		| MfaChallenge
+		| { next_step: 'pending' }
+		| null;
 
 	let loaded = false;
 
 	let mode = $config?.features.enable_ldap ? 'ldap' : 'signin';
 
-	let form = null;
+	let form: string | null = null;
 
 	let name = '';
 	let email = '';
@@ -48,23 +52,23 @@
 
 	let submitting = false;
 
-	const setSessionUser = async (sessionUser, redirectPath: string | null = null) => {
+	const setSessionUser = async (sessionUser: AuthResult, redirectPath: string | null = null) => {
 		if (sessionUser) {
-			if (sessionUser.next_step === 'pending') {
-				pendingApproval = true;
-				return;
-			}
-			if (sessionUser.challenge_token) {
-				mfaChallenge = sessionUser;
-				password = '';
-				confirmPassword = '';
+			if ('next_step' in sessionUser) {
+				if (sessionUser.next_step === 'pending') {
+					pendingApproval = true;
+				} else {
+					mfaChallenge = sessionUser;
+					password = '';
+					confirmPassword = '';
+				}
 				return;
 			}
 			toast.success($i18n.t(`You're now logged in.`));
 			if (sessionUser.token) {
 				localStorage.token = sessionUser.token;
 			}
-			$socket.emit('user-join', { auth: { token: sessionUser.token } });
+			$socket?.emit('user-join', { auth: { token: sessionUser.token } });
 			await user.set(sessionUser);
 			await config.set(await getBackendConfig());
 
@@ -139,7 +143,7 @@
 
 	const oauthCallbackHandler = async () => {
 		// Get the value of the 'token' cookie
-		function getCookie(name) {
+		function getCookie(name: string) {
 			const match = document.cookie.match(
 				new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()[\]\\/+^])/g, '\\$1') + '=([^;]*)')
 			);
@@ -414,7 +418,6 @@
 												name="password"
 												screenReader={true}
 												required
-												aria-required="true"
 											/>
 										</div>
 
@@ -663,7 +666,9 @@
 						{#if $config?.metadata?.login_footer}
 							<div class="max-w-3xl mx-auto">
 								<div class="mt-2 text-[0.7rem] text-gray-500 dark:text-gray-400 marked">
-									{@html DOMPurify.sanitize(marked($config?.metadata?.login_footer))}
+									{@html DOMPurify.sanitize(
+										marked($config.metadata.login_footer, { async: false })
+									)}
 								</div>
 							</div>
 						{/if}

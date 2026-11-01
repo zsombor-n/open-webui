@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, tick, getContext } from 'svelte';
+	import { tick, getContext } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 
@@ -7,6 +7,7 @@
 	import localizedFormat from 'dayjs/plugin/localizedFormat';
 
 	import { settings, chatId, WEBUI_NAME, models, config, user as sessionUser } from '$lib/stores';
+	import type { SessionUser } from '$lib/stores';
 	import { convertMessagesToHistory, createMessagesList, getDeepestChildId } from '$lib/utils';
 
 	import { getChatByShareId, cloneSharedChatById, forkChatById } from '$lib/apis/chats';
@@ -20,25 +21,47 @@
 	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
 	dayjs.extend(localizedFormat);
 
+	type SharedMessage = {
+		id: string;
+		parentId: string | null;
+		childrenIds: string[];
+		done?: boolean;
+		[key: string]: unknown;
+	};
+
+	type SharedHistory = {
+		messages: Record<string, SharedMessage>;
+		currentId: string | null;
+	};
+
+	type SharedChat = {
+		id: string;
+		user_id: string;
+		created_at: number;
+		chat: {
+			title: string;
+			timestamp?: number;
+			models?: string[];
+			history?: SharedHistory;
+			messages: SharedMessage[];
+			share_mode?: 'continue' | null;
+		};
+	};
+
 	let loaded = false;
 	let forking = false;
 
 	let autoScroll = true;
-	let processing = '';
-	let messagesComponent;
+	let messagesComponent: Messages | null = null;
 
-	// let chatId = $page.params.id;
-	let showModelSelector = false;
 	let selectedModels = [''];
 
-	let chat = null;
-	let user = null;
+	let chat: SharedChat | null = null;
+	let user: SessionUser | null = null;
 
 	let title = '';
-	let files = [];
-
-	let messages = [];
-	let history = {
+	let messages: SharedMessage[] = [];
+	let history: SharedHistory = {
 		messages: {},
 		currentId: null
 	};
@@ -135,21 +158,22 @@
 			if (chatContent) {
 				console.log(chatContent);
 
-				selectedModels =
-					(chatContent?.models ?? undefined) !== undefined
-						? chatContent.models
-						: [chatContent.models ?? ''];
-				history =
-					(chatContent?.history ?? undefined) !== undefined
-						? chatContent.history
-						: convertMessagesToHistory(chatContent.messages);
+				selectedModels = chatContent.models ?? [''];
+				history = chatContent.history ?? convertMessagesToHistory(chatContent.messages);
 				title = chatContent.title;
 
 				autoScroll = true;
 				await tick();
 
-				if (messages.length > 0 && messages.at(-1)?.id && messages.at(-1)?.id in history.messages) {
-					history.messages[messages.at(-1)?.id].done = true;
+				const lastMessage = messages.at(-1);
+				if (lastMessage?.id && history.messages[lastMessage.id]) {
+					history = {
+						...history,
+						messages: {
+							...history.messages,
+							[lastMessage.id]: { ...history.messages[lastMessage.id], done: true }
+						}
+					};
 				}
 				await tick();
 
@@ -215,7 +239,7 @@
 	<meta name="robots" content="noindex,nofollow" />
 </svelte:head>
 
-{#if loaded}
+{#if loaded && chat}
 	<div
 		class="h-screen max-h-[100dvh] w-full flex flex-col text-gray-700 dark:text-gray-100 bg-white dark:bg-gray-900"
 	>
@@ -260,14 +284,15 @@
 							readOnly={true}
 							forkHandler={canClone ? forkSharedChat : null}
 							{selectedModels}
-							{processing}
+							prompt=""
+							atSelectedModel={undefined}
 							bind:history
-							bind:messages
 							bind:autoScroll
-							bottomPadding={files.length > 0}
 							sendMessage={() => {}}
 							continueResponse={() => {}}
 							regenerateResponse={() => {}}
+							mergeResponses={() => {}}
+							chatActionHandler={() => {}}
 						/>
 					</div>
 				</div>
